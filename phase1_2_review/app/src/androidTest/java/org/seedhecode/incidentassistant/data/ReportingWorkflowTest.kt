@@ -169,6 +169,27 @@ class ReportingWorkflowTest : DatabaseTest() {
         assertEquals("m1", linked.pendingLinkedSessionId)
     }
 
+    /** PipelineMode.ASR_LLM turns: no Laya, so UNDETERMINED with no candidates (the helper's default shape). */
+    @Test fun asrLlmTurnsNeverGuessATypeButStillFillFieldsAndHonourTheFlags() {
+        var step = workflow.startDraft("a1")
+        step = send(step, "There's a leak and smoke", fields = listOf("description" to "Leak and smoke"), distinct = true)
+        // No classifier: identification asks instead of guessing, and the split creates no typed halves.
+        assertEquals(TurnOutcome(CLASSIFYING, "What kind of issue is this?"), TurnOutcome(step.state, step.question))
+        assertNull(query("SELECT proposed_incident_type_id FROM draft_sessions WHERE session_id = 'a1'"))
+        assertEquals("CLASSIFYING", query("SELECT state FROM draft_sessions WHERE session_id = 'a1_linked'"))
+        assertNull(query("SELECT proposed_incident_type_id FROM draft_sessions WHERE session_id = 'a1_linked'"))
+
+        // Once a type is known (app-confirmed), ASR_LLM turns drive form filling, uncertainty and stop-clarifying.
+        exec("UPDATE draft_sessions SET state = 'FORM_FILLING', proposed_incident_type_id = 'water_leak' WHERE session_id = 'a1'")
+        step = send(workflow.resume("a1"), "Pipe, spreading, near sockets, N, floor 3, the pantry", fields = listOf(
+            "description" to "Leak", "leak_source" to "pipe", "water_spread" to "spreading", "near_electrical" to "true",
+            "building" to "N", "floor" to "3", "space_id" to "the pantry"))
+        assertEquals("Roughly when did this happen or when did you notice it?", step.question)
+        step = send(step, "No idea", act = DialogueAct.UNCERTAINTY)
+        assertEquals(CLARIFYING, step.state)
+        assertEquals(REVIEWING, send(step, "That's enough", stop = true).state)
+    }
+
     @Test fun cancelAndResultsAfterFinishCreateNothing() {
         val start = workflow.startDraft("c1")
         assertEquals(CANCELLED, workflow.cancel("c1").state)

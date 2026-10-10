@@ -47,7 +47,9 @@ class AndroidConversationEngine(
         var c: CfcRelevance? = null; var l: LayaIncident? = null
         try {
             s = WhisperSpeech(pack); e = QwenExtraction(pack, configuredFieldNames, configuredIncidentIds)
-            c = CfcRelevance(pack); l = LayaIncident(pack, configuredIncidentIds)
+            if (pack.mode == PipelineMode.FULL) {
+                c = CfcRelevance(pack); l = LayaIncident(pack, configuredIncidentIds)
+            }
             speech = s; extraction = e
             pipeline = ConversationPipeline(c, l, e, tools, gate, pack.versions(), { result ->
                 repository.save(result)

@@ -3,11 +3,13 @@ package org.seedhecode.incidentassistant.engine
 import android.content.Context
 import android.net.Uri
 import org.json.JSONObject
+import org.seedhecode.core.inference.PipelineMode
 import java.io.File
 import java.security.MessageDigest
 import java.util.zip.ZipInputStream
 
 data class ModelPack(val root: File, val manifest: JSONObject) {
+    val mode: PipelineMode get() = PipelineMode.parse(manifest.optString("pipeline", "full"))
     fun spec(role: String): JSONObject = manifest.getJSONObject("models").getJSONObject(role)
     fun file(name: String): File {
         require(name.isNotBlank() && !File(name).isAbsolute)
@@ -18,7 +20,7 @@ data class ModelPack(val root: File, val manifest: JSONObject) {
         return file
     }
     fun artifact(role: String) = file(spec(role).getString("file"))
-    fun versions() = listOf("asr", "cfc", "laya", "llm").associateWith {
+    fun versions() = mode.roles.associateWith {
         spec(it).getString("version") + " / " + spec(it).getString("backend")
     }
 }
@@ -91,7 +93,10 @@ class ModelStore(private val context: Context) {
             val actual = digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
             require(actual == files.getString(name).lowercase()) { "Checksum mismatch: $name" }
         }
-        for (role in listOf("asr", "cfc", "laya", "llm")) {
+        require(pack.manifest.getJSONObject("models").keys().asSequence().toSet() == pack.mode.roles) {
+            "Model roles must match the explicitly selected pipeline."
+        }
+        for (role in pack.mode.roles) {
             val spec = pack.spec(role)
             require(spec.getString("version").isNotBlank() && !spec.getString("version").contains("replace-with")) {
                 "Provide a real trained artifact version for $role."

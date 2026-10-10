@@ -38,6 +38,7 @@ class WhisperSpeech(pack: ModelPack) : SpeechModel {
 }
 
 class QwenExtraction(pack: ModelPack, private val fieldNames: Set<String>, private val incidentIds: Set<String>) : ExtractionModel {
+    private val packMode = pack.mode
     private val handle: Long
     init {
         check(NativeLlama.available) { "This APK has no Qwen runtime. Build with -PnativeModels=true." }
@@ -51,8 +52,8 @@ class QwenExtraction(pack: ModelPack, private val fieldNames: Set<String>, priva
             You extract incident facts from evidence. Return only one JSON object, no prose.
             Do not classify incident type or generate priority, department, SLA or submission claims.
             Use only these field names: ${fieldNames.sorted().joinToString(",")}.
-            Form tool IDs must be one of: ${incidentIds.sorted().joinToString(",")}.
-            Incident candidates come from Laya in the input. Do not invent a category or override its outcome.
+            ${if (packMode == PipelineMode.ASR_LLM) "Incident classification and relevance filtering are disabled. Never call get_form_fields; no incident type is available."
+                else "Form tool IDs must be one of: ${incidentIds.sorted().joinToString(",")}. Incident candidates come from Laya in the input. Do not invent a category or override its outcome."}
             Never invent a value. Every field must cite an exact substring of the evidence.
             For explicit unknown answers use status unknown and value null; never fill a guessed value.
             Handle corrections, negation and explicit unknown answers using the current question.
@@ -60,7 +61,7 @@ class QwenExtraction(pack: ModelPack, private val fieldNames: Set<String>, priva
             dialogue_act is answer, correction, negation, uncertainty, confirmation or null.
             distinct_incidents_mentioned is true only when the evidence describes two or more separate incidents.
             user_wants_to_stop_clarifying is true only when the reporter explicitly declines further optional questions.
-            You may choose local tools: get_form_fields(incident_type_id), get_zone_details(zone_name),
+            You may choose local tools: ${if (packMode == PipelineMode.FULL) "get_form_fields(incident_type_id), " else ""}get_zone_details(zone_name),
             get_zone_incident_history(zone_id,lookback_days). A call is {"name":"...","arguments":{...}}.
             Use returned tool evidence; unresolved zones remain unresolved. Calls must stop once answered.
             Separate incident_groups are exact relevant evidence spans, not invented incident IDs.
@@ -76,8 +77,19 @@ class QwenExtraction(pack: ModelPack, private val fieldNames: Set<String>, priva
             }))
         val prompt = "<|im_start|>system\n$system<|im_end|>\n<|im_start|>user\n$payload<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
         val raw = String(NativeLlama.generate(handle, prompt, 768), Charsets.UTF_8).trim()
+        return QwenResponse.parse(raw, text, fieldNames, packMode)
+    }
+    override fun close() = NativeLlama.release(handle)
+}
+
+/** Pure parser: a syntactically valid object is not automatically a valid model answer. */
+object QwenResponse {
+    fun parse(raw: String, text: String, fieldNames: Set<String>, mode: PipelineMode): Extraction {
         val response = JSONObject(raw.removePrefix("```json").removePrefix("```").removeSuffix("```").trim())
-        val fields = response.optJSONArray("fields") ?: org.json.JSONArray()
+        require(response.keys().asSequence().toSet() == CONTRACT_KEYS) {
+            "Qwen response does not match the extraction contract."
+        }
+        val fields = response.getJSONArray("fields")
         val candidates = (0 until fields.length()).map { index ->
             val field = fields.getJSONObject(index)
             val name = field.getString("field_name")
@@ -86,29 +98,39 @@ class QwenExtraction(pack: ModelPack, private val fieldNames: Set<String>, priva
             val start = text.indexOf(evidence)
             require(evidence.isNotBlank() && start >= 0) { "Field has no grounded evidence: $name" }
             val status = field.getString("status")
+            require(status in setOf("known", "unknown", "ambiguous")) { "Invalid field status." }
+            require(field.has("value")) { "Field value is missing." }
             val value = field.opt("value").takeUnless { it == JSONObject.NULL }
             require(status != "known" || value != null) { "Known field cannot be null." }
             require(status != "unknown" || value == null) { "Unknown field cannot contain a guessed value." }
-            CandidateField(name, value, field.getDouble("confidence"), Evidence(evidence, start, start + evidence.length), status)
+            val confidence = field.getDouble("confidence")
+            require(confidence.isFinite() && confidence in 0.0..1.0) { "Invalid field confidence." }
+            CandidateField(name, value, confidence, Evidence(evidence, start, start + evidence.length), status)
         }
-        val calls = response.optJSONArray("tool_calls") ?: org.json.JSONArray()
+        val calls = response.getJSONArray("tool_calls")
         val requests = (0 until calls.length()).map {
             val call = calls.getJSONObject(it); val args = call.getJSONObject("arguments")
-            ToolRequest(call.getString("name"), args.keys().asSequence().associateWith { name -> args.get(name) })
+            val name = call.getString("name")
+            require(name in setOf("get_form_fields", "get_zone_details", "get_zone_incident_history")) {
+                "Unsupported local tool: $name"
+            }
+            require(mode != PipelineMode.ASR_LLM || name != "get_form_fields") {
+                "Form lookup is disabled until an incident type is available."
+            }
+            ToolRequest(name, args.keys().asSequence().associateWith { argument -> args.get(argument) })
         }
         val act = DialogueAct.fromWire(response.optString("dialogue_act"))
-        val groups = response.optJSONArray("incident_groups") ?: org.json.JSONArray()
+        val groups = response.getJSONArray("incident_groups")
         val spans = (0 until groups.length()).map { groups.getString(it).also { span ->
             require(span.isNotBlank() && text.contains(span)) { "Ungrounded incident grouping." }
         } }
-        // Absent flags mean false; non-boolean values are rejected rather than coerced from strings.
-        fun flag(name: String): Boolean = when (val value = response.opt(name)) {
-            null, JSONObject.NULL -> false
-            is Boolean -> value
-            else -> throw IllegalArgumentException("$name must be a boolean.")
-        }
+        // Both flags are required by CONTRACT_KEYS; anything but a JSON boolean is rejected, never coerced.
+        fun flag(name: String): Boolean = response.get(name) as? Boolean
+            ?: throw IllegalArgumentException("$name must be a boolean.")
         return Extraction(candidates, act, requests, spans,
             flag("distinct_incidents_mentioned"), flag("user_wants_to_stop_clarifying"))
     }
-    override fun close() = NativeLlama.release(handle)
+
+    val CONTRACT_KEYS = setOf("fields", "dialogue_act", "tool_calls", "incident_groups",
+        "distinct_incidents_mentioned", "user_wants_to_stop_clarifying")
 }

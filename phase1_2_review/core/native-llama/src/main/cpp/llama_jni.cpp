@@ -65,7 +65,31 @@ Java_org_seedhecode_incidentassistant_engine_NativeLlama_generate(JNIEnv *env, j
             fail(env, "Qwen job cancelled or decode failed."); return nullptr;
         }
     }
-    auto sampler = std::unique_ptr<llama_sampler, decltype(&llama_sampler_free)>(llama_sampler_init_greedy(), llama_sampler_free);
+    // Constrain syntax at generation time; Kotlin still checks evidence and the contract.
+    static const char *grammar = R"gbnf(
+root ::= "{" ws "\"fields\"" ws ":" ws fields "," ws "\"dialogue_act\"" ws ":" ws act "," ws "\"tool_calls\"" ws ":" ws tools "," ws "\"incident_groups\"" ws ":" ws groups "}" ws
+fields ::= "[" ws (field ("," ws field)*)? "]" ws
+field ::= "{" ws "\"field_name\"" ws ":" ws string "," ws "\"value\"" ws ":" ws value "," ws "\"confidence\"" ws ":" ws confidence "," ws "\"evidence\"" ws ":" ws string "," ws "\"status\"" ws ":" ws status "}" ws
+confidence ::= ("0" ("." [0-9]+)? | "1" ("." "0"+)?) ws
+status ::= ("\"known\"" | "\"unknown\"" | "\"ambiguous\"") ws
+act ::= ("null" | "\"answer\"" | "\"correction\"" | "\"negation\"" | "\"uncertainty\"" | "\"confirmation\"") ws
+tools ::= "[" ws (tool ("," ws tool)*)? "]" ws
+tool ::= "{" ws "\"name\"" ws ":" ws tool-name "," ws "\"arguments\"" ws ":" ws object "}" ws
+tool-name ::= ("\"get_form_fields\"" | "\"get_zone_details\"" | "\"get_zone_incident_history\"") ws
+groups ::= "[" ws (string ("," ws string)*)? "]" ws
+value ::= object | array | string | number | ("true" | "false" | "null") ws
+object ::= "{" ws (string ":" ws value ("," ws string ":" ws value)*)? "}" ws
+array ::= "[" ws (value ("," ws value)*)? "]" ws
+string ::= "\"" ([^"\\\x7F\x00-\x1F] | "\\" (["\\bfnrt] | "u" [0-9a-fA-F]{4}))* "\"" ws
+number ::= "-"? ("0" | [1-9] [0-9]{0,15}) ("." [0-9]+)? ([eE] [-+]? [0-9]{1,16})? ws
+ws ::= | " " | "\n" [ \t]{0,20}
+)gbnf";
+    auto sampler = std::unique_ptr<llama_sampler, decltype(&llama_sampler_free)>(
+        llama_sampler_chain_init(llama_sampler_chain_default_params()), llama_sampler_free);
+    auto constrained = llama_sampler_init_grammar(vocab, grammar, "root");
+    if (!constrained) { fail(env, "Qwen JSON grammar initialization failed."); return nullptr; }
+    llama_sampler_chain_add(sampler.get(), constrained);
+    llama_sampler_chain_add(sampler.get(), llama_sampler_init_greedy());
     std::string output;
     bool ended = false;
     for (int i = 0; i < maximum; ++i) {
