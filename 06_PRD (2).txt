@@ -1,0 +1,222 @@
+================================================================================
+PRODUCT REQUIREMENTS DOCUMENT (PRD) - REV. 2
+AI Incident Report Assistant
+Updated for department/incident-type form routing, bounded clarification,
+named model candidates, new reliability/validation requirements, and the
+demotion of GNN/DynoTears to optional future work.
+================================================================================
+
+1. PROBLEM STATEMENT
+--------------------------------------------------------------------------------
+Employees avoid reporting facility incidents because filling out a form is
+friction. Qualcomm's problem statement asks for an on-device, voice-driven
+assistant that turns a spoken incident description into a structured
+report using on-device Generative AI and function calling, following
+SPEAK -> UNDERSTAND -> EXTRACT -> REVIEW -> SUBMIT.
+
+This revision sharpens that into: identify what kind of incident this is
+and who's responsible for it, load that incident type's own form, fill it
+through natural conversation (never inventing missing values), ask only
+clarifying questions that earn their keep, and let the user review and
+correct before anything is submitted.
+
+2. GOALS
+--------------------------------------------------------------------------------
+  G1. Let any employee report an incident by speaking naturally, in
+      English, Hindi, or code-mixed speech, with zero form-filling by hand.
+  G2. Automatically identify the incident type and responsible department,
+      and load that type's own required/optional field set from local
+      configuration -- not a single generic field set for everything.
+  G3. Fill required fields through conversation, letting one answer fill
+      multiple fields, accepting "I don't know" as valid, and never
+      silently inventing a value.
+  G4. Ask a bounded, relevance-driven set of further clarifying questions
+      -- not a fixed-length interview.
+  G5. Let the user review, correct, skip remaining clarification, or
+      cancel before anything is submitted, with corrections properly
+      invalidating stale downstream predictions.
+  G6. Run the entire pipeline on-device (QIDK/Snapdragon via QAIRT), with
+      zero calls to any external/cloud API, provable by running the full
+      flow -- including routing and form-filling -- offline.
+  G7. Surface incidents in both a department queue and a visual indoor
+      map, with one click/tap from either to the full report.
+  G8. Build in the production-reliability basics (versioning, auth,
+      duplicate protection, correction audit trail) rather than treating
+      them as post-hackathon polish.
+
+3. NON-GOALS (EXPLICITLY OUT OF SCOPE)
+--------------------------------------------------------------------------------
+  - Outdoor/GPS-based mapping (indoor, floor-plan-based only).
+  - Languages other than English and Hindi.
+  - Typed input as the primary interaction path.
+  - Cross-device/cloud sync between separate kits.
+  - Training new foundation models from scratch (we select and
+    quantize/benchmark existing small models -- see 03_TRD.txt section 3).
+  - COMMITTED NON-GOAL FOR THE CORE BUILD (downgraded from the earlier
+    draft): GNN-based incident-relatedness and DynoTears-style causal
+    trend analysis. These remain schema-ready, optional stretch work
+    only -- see 03_TRD.txt section 10.
+
+4. PERSONAS
+--------------------------------------------------------------------------------
+  P1. Employee / Reporter -- wants to report an issue in seconds, in
+      whichever language is natural, without hunting for form fields, and
+      wants the system to actually remember what they already said.
+  P2. Department Admin -- owns one department's queue (e.g. Electrical),
+      wants incoming reports pre-sorted to them with the right fields
+      already filled in for that incident type.
+  P3. Facilities/Super Admin -- owns environment setup (zones, departments,
+      incident-type forms), sees everything across departments, and the
+      map view.
+
+5. USER STORIES
+--------------------------------------------------------------------------------
+  US1. As an Employee, I can speak my report in English, Hindi, or a mix,
+      without choosing a language first.
+  US2. As an Employee, I'm not cut off by a timer -- the system waits for
+      me to actually finish a thought.
+  US3. As an Employee, if what I'm describing isn't clear yet (e.g. is
+      this a leak, or an electrical issue?), I'm asked a short
+      clarifying question about that, not just generic follow-ups.
+  US4. As an Employee, once the system knows what kind of incident this
+      is, it only asks me for details that type actually needs -- not a
+      one-size-fits-all form.
+  US5. As an Employee, one answer can cover several questions at once, and
+      I'm never asked again for something I already said.
+  US6. As an Employee, I can say "I don't know" and have that respected,
+      rather than the system guessing or nagging me.
+  US7. As an Employee, after required details are filled, I'm asked only a
+      few optional questions that genuinely help, and I can say "that's
+      enough" at any point.
+  US8. As an Employee, I can interrupt the assistant mid-question to
+      answer early or correct something, and it stops talking right away.
+  US9. As an Employee, before anything is submitted, I hear/see a full
+      summary and can confirm it, correct a specific detail, skip
+      remaining optional questions, or cancel entirely.
+  US10. As an Employee, if my app/session is interrupted, I can resume my
+      draft report instead of starting over.
+  US11. As a Department Admin, I see a queue of only my department's
+      incidents, pre-filled with the fields relevant to each incident
+      type.
+  US12. As a Facilities/Super Admin, I configure zones, departments, and
+      each incident type's own form (required + clarifying fields) before
+      anyone reports anything.
+  US13. As an Admin, clicking a map pin or a queue row shows me the full
+      structured report immediately, including which fields are
+      genuinely unknown vs. filled.
+  US14. As a Judge/Evaluator, I can watch the entire flow run with the kit's
+      network disabled and see department routing, form-filling, and
+      submission still work end to end.
+
+6. FUNCTIONAL REQUIREMENTS
+--------------------------------------------------------------------------------
+  FR1  System SHALL accept spoken input in English, Hindi, or code-mixed
+       speech without a manual language-selection step, via streaming ASR
+       with stable/final transcript markers and no fixed-duration cutoff.
+  FR2  System SHALL run a lightweight, always-on LNN layer that proposes
+       incident-type/department classification, dialogue-act detection,
+       and candidate field values before the semantic model is invoked.
+  FR3  System SHALL NOT assume the LNN translates Hindi; Hindi/code-mixed
+       handling must be explicitly assigned to a specific component
+       (ASR, semantic model, or an added normalization step) as a Phase 1
+       decision, not an assumption.
+  FR4  System SHALL load a per-incident-type form (required + clarifying
+       fields) from local configuration once the type is identified or
+       provisionally identified.
+  FR5  System SHALL ask a disambiguating question when incident-type
+       candidates are closely ambiguous, and keep routing provisional
+       until supported.
+  FR6  System SHALL support one narration producing more than one linked
+       incident record when warranted.
+  FR7  System SHALL let one user answer fill multiple fields regardless of
+       which field was asked about, and SHALL NOT re-ask for a field
+       already known or explicitly marked unknown at the current revision.
+  FR8  System SHALL accept "I don't know" as a valid, stored field state
+       and SHALL NOT invent a value for a missing field.
+  FR9  System SHALL ask clarifying (non-required) questions only until a
+       relevance/diminishing-returns/user-preference stopping rule fires.
+  FR10 System SHALL implement a REVIEW stage offering four actions:
+       Confirm, Correct a detail, Skip remaining clarification, Cancel.
+  FR11 A correction during REVIEW SHALL invalidate any derived prediction
+       that depended on the corrected value, and SHALL require a fresh
+       Confirm on the new revision.
+  FR12 System SHALL perform real, model-selected local function calls
+       (see 03_TRD.txt section 5) from a fixed, typed, allowlisted set.
+  FR13 System SHALL render a department queue per department and a visual
+       indoor map with zone highlighting and reporter pins, updated
+       immediately on submission.
+  FR14 System SHALL distinguish "saved locally" from "delivered to another
+       device/team," and SHALL NOT claim delivery without a confirmed
+       delivery mechanism.
+  FR15 System SHALL support draft recovery after a crash/interruption.
+  FR16 System SHALL require admin authentication with role levels for
+       admin actions.
+  FR17 None of the above SHALL require any network call to a third-party
+       or cloud service at run time.
+  FR18 (Optional/future, non-blocking) System MAY compute incident
+       relatedness (GNN) and causal trend data (DynoTears-style),
+       strictly as background jobs that never delay FR1-FR17 and are
+       never presented as proven causation.
+
+7. NON-FUNCTIONAL REQUIREMENTS
+--------------------------------------------------------------------------------
+  NFR1  Fully functional with the device's network interface disabled.
+  NFR2  P95 latency targets per 03_TRD.txt section 6, measured on the
+        actual kit once hardware is confirmed.
+  NFR3  Every model job carries session/turn/draft-revision stamps; a
+        stale result can never overwrite a newer correction.
+  NFR4  Barge-in/interruption and echo cancellation on all TTS playback.
+  NFR5  Transactional writes, duplicate-submission protection, and
+        versioned/rollback-capable schemas, routing rules, and model
+        weights.
+  NFR6  Full field-level provenance/evidence/status retained, including
+        original transcripts and correction history.
+  NFR7  Model confidence scores are never presented as calibrated
+        probabilities.
+  NFR8  UI usable as a shared kiosk device (legible from a distance, large
+        touch targets, color + text redundancy for status).
+  NFR9  No incident data (including raw audio) ever leaves the device.
+
+8. SUCCESS METRICS (HACKATHON DEMO)
+--------------------------------------------------------------------------------
+  M1  Live, offline, end-to-end demo: SPEAK -> IDENTIFY (including at
+      least one disambiguation) -> FORM_FILLING (including at least one
+      "I don't know") -> CLARIFYING -> REVIEW (including at least one
+      correction) -> SUBMIT -> department queue + map pin, in one
+      continuous run.
+  M2  At least one Hindi/code-mixed report and one English report, both
+      correctly routed to the right incident type/department.
+  M3  Demonstrated barge-in: user interrupts a follow-up question
+      mid-playback and the system responds correctly.
+  M4  Judges can see the function-call log and the field-level
+      provenance/status for at least one incident on request.
+  M5  (If Phase 4 work is included) at least one GNN-flagged "possibly
+      related" pair shown, clearly labeled as such, not as a proven cause.
+
+9. RISKS AND MITIGATIONS
+--------------------------------------------------------------------------------
+  R1  Exact QIDK chipset/RAM/OS still unconfirmed, so model-size decisions
+      are provisional. Mitigation: resolve this first, inside Phase 1,
+      before committing to a specific ASR/LNN/semantic-model size.
+  R2  LNN cannot be assumed to translate Hindi -- if that assumption creeps
+      back in, the whole bilingual story breaks. Mitigation: make the
+      Hindi-handling owner an explicit, written Phase 1 decision (FR3),
+      not an implicit default.
+  R3  Custom CfC-based LNN is high research risk (unproven size/training/
+      accelerator fit). Mitigation: benchmark the pretrained LFM2.5
+      alternative in parallel from day one of Phase 1, and pick whichever
+      actually clears validation on the real kit.
+  R4  Whisper's fixed 30s input window may not deliver genuine low-latency
+      streaming. Mitigation: benchmark Qwen3-ASR-0.6B's documented
+      streaming behavior against it early, don't assume either wins.
+  R5  Hindi-speaking users may not reliably understand English-only
+      assistant output -- currently untested. Mitigation: explicit
+      usability test step before treating this as resolved; flagged
+      throughout 05_UIUX_REQUIREMENTS.txt.
+  R6  An unbounded clarification stage risks feeling like "an endless
+      interview." Mitigation: the stopping rule (FR9) and a hard max-
+      question bound are both required, not optional polish.
+  R7  GNN/DynoTears feel bolted-on if rushed. Mitigation: kept strictly
+      optional/Phase 4, behind the core flow being solid first (see
+      08_IMPLEMENTATION_PLAN.txt).
+================================================================================

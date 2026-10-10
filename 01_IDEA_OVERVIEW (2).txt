@@ -1,0 +1,317 @@
+================================================================================
+AI INCIDENT REPORT ASSISTANT - FULL IDEA OVERVIEW (REV. 2)
+Qualcomm Problem Statement Track - MEGATHON X (E-Cell, IIIT Hyderabad)
+Updated: 10 October 2026 - incorporates department/incident-type form routing,
+revised LNN scope, named model candidates, and demotion of GNN/DynoTears to
+optional future work. Superseded: the original generic-slot-set design.
+================================================================================
+
+1. ORIGINAL PROBLEM STATEMENT (AS GIVEN, UNCHANGED)
+--------------------------------------------------------------------------------
+Title        : AI Incident Report Assistant
+One-liner    : End-to-end voice-driven incident reporting using on-device
+               Generative AI and function calling.
+Track        : ON-DEVICE AI CHALLENGE
+Tagline      : "Voice in. Structured report out."
+Required kit : Qualcomm Innovators Development Kit (QIDK)
+Required SDK : QAIRT (Qualcomm AI Runtime)
+Model source : Qualcomm AI Hub (models compatible with Snapdragon chipsets)
+Mandated flow: SPEAK -> UNDERSTAND -> EXTRACT -> REVIEW -> SUBMIT
+Hard rule for this build: zero cloud/API calls at runtime -- everything
+executes on-device.
+
+2. CORE IDEA (REVISED)
+--------------------------------------------------------------------------------
+An employee talks naturally to the app about a workplace incident, without
+any predefined commands. The app:
+  1. Builds context from the initial narration as it arrives (streaming).
+  2. Identifies the likely incident type (e.g. water leak, electrical
+     hazard, access-control fault) and the department responsible for it.
+  3. Loads that incident type's specific form -- its required fields,
+     optional fields, priority rules, and responsible roles -- from local
+     configuration (not a single generic slot set shared by everything).
+  4. Asks only for the required fields still missing, letting one answer
+     fill several fields at once regardless of which question prompted it.
+     "I don't know" is accepted as a valid, explicit answer -- the system
+     never silently invents a value.
+  5. Once required fields are addressed, asks a small, bounded number of
+     further clarifying questions that genuinely improve diagnosis,
+     assignment, urgency, or the description -- stopping based on
+     relevance, diminishing returns, and user preference, not a fixed
+     question count.
+  6. Shows and speaks the completed report for the user to confirm, correct
+     any detail, skip remaining optional clarification, or cancel.
+  7. On confirmation, saves the report locally, places it in its
+     department's queue, and updates the indoor incident map.
+
+The product prioritizes seamless, real-time, accurate interaction over
+architectural purity. Added implementation complexity (e.g. a custom
+lightweight neural layer) is justified only when it demonstrably improves
+those outcomes -- not adopted for its own sake.
+
+3. HARD CONSTRAINTS AND LANGUAGE SCOPE
+--------------------------------------------------------------------------------
+  - All AI models execute on-device using Snapdragon acceleration (QAIRT /
+    Qualcomm AI Hub models). No cloud AI APIs are used at runtime.
+  - Model weights, forms, routing rules, and required assets are prepared
+    locally before use. The full reporting flow -- including department
+    routing and form completion -- must work fully offline.
+  - Real, model-selected local function calling connects language
+    understanding to application data and operations (not a decorative
+    function-call demo -- the model actually decides when and what to call).
+  - Input supports English, Hindi, and natural code-mixed speech, subject
+    to ongoing validation against real recordings.
+  - Structured reports and spoken output remain English-only under the
+    current scope. OPEN RISK, NOT YET VALIDATED: whether Hindi-speaking
+    users reliably understand the assistant's English-only follow-up
+    questions -- this needs real usability testing, not an assumption.
+
+4. END-TO-END EXPERIENCE (REPLACES THE OLD SPEAK/UNDERSTAND/EXTRACT/REVIEW/
+   SUBMIT NARRATIVE WITH THE DEPARTMENT-FORM-DRIVEN VERSION)
+--------------------------------------------------------------------------------
+  A. SPEAK AND BUILD CONTEXT
+     The user describes the incident with no predefined commands. Streaming
+     transcription and the LNN begin processing as speech arrives. Captions
+     and tentative understanding are shown without interrupting the
+     narration. There is no arbitrary timer that cuts the user off --
+     turn-end is detected from the speech itself.
+
+  B. IDENTIFY INCIDENT TYPE AND DEPARTMENT
+     The app proposes an incident type (water leak, electrical hazard,
+     access-control fault, etc.). Local configuration maps that type to a
+     department, its required/optional fields, priority, and responsible
+     roles. Ambiguous cases trigger a short disambiguating question, and
+     routing stays provisional until supported by enough evidence. Several
+     incident types can share one department while needing different
+     forms. A single narration can, when warranted, create more than one
+     linked incident record (e.g. a leak that also damaged nearby
+     electrical equipment).
+
+  C. COMPLETE THE FORM THROUGH CONVERSATION
+     The app asks only for missing required details. Each answer can fill
+     several fields at once, regardless of which question was asked. It
+     never re-asks for a detail the conversation has already supported.
+     "I don't know" is a valid, recorded outcome -- missing information is
+     never silently invented.
+
+  D. CLARIFY THE INCIDENT
+     Once required fields are addressed, the app asks only unanswered
+     questions that would meaningfully improve diagnosis, assignment,
+     urgency, or the description. It avoids an endless interview by
+     stopping on relevance, diminishing returns, or explicit user
+     preference ("that's enough"). Hazard-related questions are asked
+     earlier, during C, if the situation needs it -- they are not held
+     back purely for this stage.
+
+  E. REVIEW AND CORRECT
+     The app displays and speaks the completed report. The user can
+     confirm, correct any detail, skip remaining optional clarification,
+     or cancel outright. A correction updates the report and invalidates
+     any downstream prediction that depended on the corrected value (e.g.
+     a severity classification derived from the old description is
+     re-evaluated). Confirmation applies to the current report revision --
+     a later correction requires a fresh confirmation.
+
+  F. SUBMIT AND DISPLAY
+     The confirmed report is saved locally, appears in its department's
+     queue, and updates the indoor incident map. Admins can inspect the
+     report, listen to its spoken summary, and update its operational
+     status. Local submission (saved on-device) is explicitly distinct
+     from delivery to another device or team -- the system only claims a
+     notification was sent once an actual delivery mechanism is built and
+     confirms it; it does not assume delivery just because it was saved.
+
+5. MODEL AND APPLICATION RESPONSIBILITIES
+--------------------------------------------------------------------------------
+  STREAMING SPEECH RECOGNITION
+    Produces incremental transcripts with stable/final markers and
+    revisions (a word shown as "tentative" can still change before it's
+    marked final). Must be evaluated specifically against Hindi, code-mixed
+    speech, room names, equipment IDs, and real workplace background noise
+    -- generic benchmark accuracy is not assumed to transfer.
+
+  LNN - CONTINUOUS UNDERSTANDING LAYER
+    Retained as the fast, always-on understanding layer, but its job is
+    now specific: incident classification, dialogue-act detection (is this
+    utterance an answer, a correction, a negation, an expression of
+    uncertainty, or a confirmation?), and candidate field extraction.
+    IMPORTANT CORRECTION FROM THE EARLIER DESIGN: the LNN is NOT assumed to
+    translate Hindi. If it is implemented as a custom LTC/CfC network, it
+    needs its own trained language representation and task-specific
+    training data -- it does not inherit multilingual understanding for
+    free. It starts out producing tentative predictions only; it is only
+    allowed to complete a task directly, without the semantic model
+    double-checking it, once validation demonstrates adequate accuracy on
+    that specific task.
+
+  ON-DEVICE SEMANTIC LANGUAGE MODEL
+    Handles ambiguous narration, complex corrections, contradictions,
+    difficult extraction, contextual clarification questions, and local
+    function-call requests. It verifies the LNN's free-form extraction
+    results, at least initially. A calibrated routing policy decides,
+    per task, which validated tasks the LNN is later trusted to handle
+    alone -- this policy is itself something to measure, not assume.
+
+  APPLICATION CODE
+    Owns the form schemas, validation rules, conversation state, question
+    selection, priority/routing rules, persistence, and the
+    confirmation/submission gates. Model predictions only ever propose
+    updates; the validated application state is the single source of
+    truth. User-stated facts are kept separate from derived priority
+    values and defaults, so a later correction to a fact doesn't silently
+    corrupt a value the app itself computed.
+
+  TEXT-TO-SPEECH
+    Speaks questions and summaries. Common questions are cached;
+    dynamic content (summaries, corrections read-back) is synthesized
+    locally on demand. Playback must be interruptible -- the user can
+    start speaking over it to answer early or correct it.
+
+6. MODEL SHORTLIST -- CANDIDATES, NOT FINAL SELECTIONS
+--------------------------------------------------------------------------------
+  - Custom LNN: evaluate a CfC (Closed-form Continuous-time) network with
+    separate classification, dialogue-act, and extraction heads. Size,
+    training data requirements, and exact Snapdragon accelerator
+    compatibility are all currently unproven and need benchmarking.
+  - Alternative reading of "LNN" -- a pretrained Liquid AI model: evaluate
+    LFM2.5-230M or LFM2.5-1.2B-Instruct. These are hybrid
+    convolution/attention LFMs and are NOT a drop-in replacement for a
+    custom LTC/CfC layer -- different architecture, different integration
+    work. Their documented supported languages do not include Hindi, so
+    either an adaptation step or a separately validated multilingual path
+    is required before relying on them for Hindi/code-mixed input.
+  - ASR candidates: compare multilingual Whisper-Base/Small against
+    Qwen3-ASR-0.6B. The latter documents native streaming behavior and
+    Hindi support; its exact acceleration on this specific kit still needs
+    checking. Note: listed Whisper exports use a fixed 30-second input
+    window -- chunking audio into 30s blocks does not by itself give you
+    genuine low-latency streaming behavior.
+  - Semantic model candidates: benchmark Qwen3-1.7B (thinking mode
+    disabled) as the quality-oriented option, against Qwen3-0.6B and
+    Qwen3.5-0.8B as faster/lighter alternatives.
+  - TTS candidates: evaluate an accelerated MeloTTS-EN build and a
+    compatible Kokoro-82M export.
+  - Noted but not selected: LFM2.5-Audio-1.5B is an English-only research
+    model -- not a candidate for the Hindi/code-mixed production path.
+
+  Selection rule: the full pipeline is chosen by MEASURED report accuracy,
+  total completion time, tail (P95+) latency, memory use, power draw, and
+  thermal behavior, all measured on the actual physical device -- not by
+  spec-sheet comparison. The exact QIDK chipset variant, RAM, OS build, and
+  the final LNN implementation choice are all still pending and should be
+  nailed down at the very start of kit-bound work (see
+  08_IMPLEMENTATION_PLAN.txt, Phase 1).
+
+7. WHAT MAKES THE EXPERIENCE SEAMLESS (NEW REQUIREMENTS SECTION)
+--------------------------------------------------------------------------------
+  - Automatic turn detection allows natural pauses without cutting the
+    user off.
+  - The user can interrupt (barge in on) assistant speech to answer early
+    or issue a correction.
+  - Echo cancellation prevents the app from transcribing its own TTS
+    output as if it were user speech.
+  - Field updates on screen are stable -- no flickering labels, no
+    premature commitments to a value that's still tentative.
+  - Every model job carries a session ID, a turn ID, and a draft-revision
+    number; a stale result can never overwrite a newer correction or
+    another session's state.
+  - Models stay "warm" within measured resource budgets. Routine questions
+    use cached templates; the semantic model is invoked only when the
+    situation actually needs it.
+  - Audio capture and response scheduling is prioritized over any
+    background analytics work -- nothing analytical is allowed to add
+    latency to the live conversation.
+  - Draft recovery: progress is preserved and resumable after a crash or
+    interruption.
+
+  Initial P95 design targets (targets to engineer toward, not yet measured
+  guarantees):
+    Listening feedback shown to user         : under 100 ms
+    Stop TTS playback once user speech starts: under 150 ms
+    First next-question audio, fast/LNN path : under 1 s after speech ends
+    First next-question audio, semantic path : under 2 s after speech ends
+
+8. DATA, TRUST, AND PRODUCTION RELIABILITY (NEW)
+--------------------------------------------------------------------------------
+  - Every field stores: its value, the supporting transcript evidence, its
+    provenance (which component filled it), and an explicit state --
+    missing / known / unknown / ambiguous. Original transcripts and the
+    full correction history are preserved, never overwritten.
+  - Model confidence scores are NOT treated as calibrated probabilities --
+    they inform routing/UX decisions, not final trust judgments.
+  - A "draft session" owns its conversation log before any submitted
+    incident exists -- a crashed or abandoned draft is not a phantom
+    incident.
+  - Production-reliability requirements: database transactions,
+    duplicate-submission protection, a typed and allowlisted set of
+    callable functions (the model cannot call anything outside this set),
+    admin authentication and roles, protected local storage, and data
+    retention controls. Form schemas, routing rules, and model weights are
+    all versioned, with rollback support.
+  - Validation plan: test against held-out recordings spanning languages,
+    speakers, incident types, background noise, interruptions, negation,
+    "I don't know" answers, and corrections. Track field accuracy, routing
+    accuracy, false-fill rate, hazard-question recall, repeated-question
+    rate, completion rate, and end-to-end latency. Models are trained
+    offline and released as reviewed, versioned builds -- never updated
+    live against production conversations.
+
+9. ADMIN MAP AND ANALYTICS (SCOPE CLARIFIED)
+--------------------------------------------------------------------------------
+  COMMITTED: the local floor-plan editor, incident pins, structured report
+  panel, audio summary playback, and status controls. Pins represent where
+  an incident was reported -- they explicitly do NOT imply live employee
+  tracking.
+
+  POTENTIAL / FUTURE, NOT COMMITTED FOR THE CORE BUILD: related-incident
+  analysis and GNN/trend features (the causal-trend job once called
+  "DynoTears" in the earlier draft). If built at all, these run as
+  background jobs with bounded resource use, never delay the live
+  reporting conversation, and must never present a correlation as a
+  verified cause to an admin. Treat as a stretch addition only after the
+  core department-form flow (Phases 1-4 below) is solid.
+
+10. MAIN CHANGES FROM THE ORIGINAL IDEA (CARRIED FORWARD FROM THE SOURCE
+    UPDATE, FOR TRACEABILITY)
+--------------------------------------------------------------------------------
+  - Department- and incident-specific forms replace the earlier, mostly
+    generic slot set.
+  - Required-field completion is now explicitly followed by a separate,
+    bounded clarification stage.
+  - The LNN is retained, but with explicit, named trained tasks and a
+    validated fast-path/hand-off policy -- not assumed to "just work,"
+    and explicitly not assumed to translate Hindi.
+  - Streaming transcription, interruptions, echo handling, and transcript
+    revisions are now first-class requirements, not implementation detail.
+  - Uncertainty, evidence, and corrections are explicit, stored report
+    state -- not just a final clean dossier.
+  - Named model candidates (Whisper/Qwen3-ASR, LFM2.5/custom CfC,
+    Qwen3-family semantic models, MeloTTS/Kokoro) replace the earlier
+    general parameter-budget placeholders.
+  - Readiness for production is determined by measured end-to-end UX and
+    reliability metrics, not by architecture diagrams alone.
+  - GNN/DynoTears-style relational and causal analytics are downgraded
+    from a committed feature to an optional, bounded, non-blocking future
+    addition.
+
+11. RELATED DOCUMENTS IN THIS PACKAGE
+--------------------------------------------------------------------------------
+  02_DATABASE_SCHEMA.txt     - full local SQLite schema (updated for forms,
+                                departments, draft sessions, provenance)
+  03_TRD.txt                 - technical requirements, named model
+                                shortlist, latency/concurrency/reliability
+  04_DESIGN_FLOW.txt         - system + data flow, revised state machine
+  05_UIUX_REQUIREMENTS.txt   - UI/UX requirements for both app modes
+  06_PRD.txt                 - product requirements document
+  07_APP_FLOW.txt            - screen-by-screen user journey
+  08_IMPLEMENTATION_PLAN.txt - 5-phase build plan: kit-bound work clubbed
+                                into Phases 1-2, two independent non-kit
+                                work-streams in Phases 3-4, Phase 5 merges
+                                everything and finishes the UI/app shell
+
+  NOTE: this overview references a deeper research document,
+  "10_PRODUCTION_LNN_ARCHITECTURE.md" (sources and deployment gates for the
+  LNN decision), which has not yet been produced as part of this package --
+  flagged as an open item for whoever owns the LNN/model-selection work in
+  Phase 1.
+================================================================================

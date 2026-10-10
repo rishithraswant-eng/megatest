@@ -1,0 +1,116 @@
+================================================================================
+APP FLOW - SCREEN-BY-SCREEN USER JOURNEY - REV. 2
+AI Incident Report Assistant
+Updated for department/incident-type routing, bounded clarification, the
+4-action review step, draft recovery, and department queues.
+================================================================================
+(See 05_UIUX_REQUIREMENTS.txt for screen-level UI detail; this file is the
+sequential journey.)
+
+--------------------------------------------------------------------------------
+JOURNEY A: ADMIN, FIRST-TIME SETUP (happens once, before any reports)
+--------------------------------------------------------------------------------
+A1. Launch app -> select "Admin Mode" -> log in (admin auth, role level).
+A2. Tap "Create Environment" -> enter org name -> upload floor-plan image.
+A3. Zone Editor: draw polygons -> name each zone, floor label, category
+    hints.
+A4. Department & Incident-Type Editor:
+      - Add departments (Facilities/Electrical, IT, Security, ...).
+      - For each incident type: set label, assign department, default
+        priority, responsible roles, disambiguation hint.
+      - Build that incident type's form: add required fields and
+        clarifying fields, each with a data type and cached prompt text.
+      - Repeat per incident type -- this is what makes forms
+        department-specific rather than one generic set.
+A5. (Optional) Add employee profiles with display name + default home zone.
+A6. Add further admin accounts/roles as needed.
+A7. Switch to Live Map Dashboard and Department Queues -> confirm empty
+    state renders correctly (zones visible, no incidents yet, each
+    department's queue present but empty).
+    --> Setup complete.
+
+--------------------------------------------------------------------------------
+JOURNEY B: EMPLOYEE, REPORTING AN INCIDENT (the core demo path)
+--------------------------------------------------------------------------------
+B1. Launch app -> "User Mode" -> Home/Report screen. If a resumable draft
+    exists, offered "Resume previous report?" first (see 05_UIUX_
+    REQUIREMENTS.txt 2.7); otherwise a fresh draft_sessions row is created.
+B2. Tap mic -> speak the incident, English/Hindi/code-mixed, no predefined
+    commands, no time limit. Live caption shows tentative text (dim) that
+    firms up to final text (solid) as the stream resolves.
+B3. IDENTIFY: once enough is captured, the screen shows a provisional
+    incident-type/department chip.
+      - If confidently resolved, proceeds straight to B4.
+      - If ambiguous, a disambiguating question is asked (text + spoken,
+        e.g. "Is this about the leak, or the panel it may have damaged?");
+        user answers by voice; loop back into B3 with the new evidence.
+      - If the narration implies more than one incident, a second linked
+        draft begins, handled independently from here on.
+B4. FORM_FILLING: the system asks only for required fields still missing
+    for this incident type's form, one at a time, but accepts whatever
+    the user actually says -- a single answer may fill several of them.
+    A field-progress checklist shows each required field's state (Missing
+    / Known / Unknown / Ambiguous). The user can say "I don't know" for
+    any field, which is accepted and recorded, not treated as a retry.
+    User can interrupt (barge in on) any spoken question at any time.
+B5. CLARIFYING: once required fields are known/unknown, the system asks a
+    bounded set of further questions that genuinely help diagnosis,
+    urgency, or assignment -- visually distinguished from B4 as optional.
+    The user can say "that's enough" at any point to skip ahead to B6.
+B6. REVIEW: the system speaks + shows the full summary (all fields and
+    their states). User chooses one of:
+      - Confirm -> proceed to B7.
+      - Correct a detail -> states the correction by voice; the field (and
+        anything derived from it) updates; the revision increments;
+        summary re-plays; loop back into B6.
+      - Skip remaining clarification -> only offered if B5 hadn't finished;
+        proceeds to B6's summary without those fields.
+      - Cancel -> draft is marked Cancelled; no incident is created; B1 is
+        offered again.
+B7. SUBMIT: on Confirm, the report is saved locally (transactional write),
+    appears in its department's queue, and the map updates -- a highlighted
+    zone and a new pin for the reporter. The Done screen shows the report
+    and/or plays its audio summary, and explicitly states it was saved
+    locally (never implying the department was "notified" unless a real
+    delivery mechanism exists).
+B8. "Report Another Incident" returns to B1 with a fresh draft session.
+
+--------------------------------------------------------------------------------
+JOURNEY C: ADMIN, MONITORING LIVE (runs in parallel with Journey B)
+--------------------------------------------------------------------------------
+C1. Admin is on the Live Map Dashboard and/or Department Queues screen.
+C2. The moment an employee completes B7, the relevant zone highlights
+    (by priority) with a new pin, AND the relevant department's queue
+    gains a new row -- both update from the same submission, same moment.
+C3. Admin opens the new row/pin -> Dossier Panel: all fields with their
+    values and explicit states (so an "Unknown" field reads as "user
+    didn't know," not as a data-entry gap), plus the function-call log
+    for that report on request.
+C4. Admin optionally plays the audio summary.
+C5. Admin updates status (Open -> In Progress -> Resolved); reflected on
+    both the queue row and the map pin color.
+C6. (Independent, optional/future) Admin may check a Trend View showing
+    DynoTears-style causal_edges, if Phase 4 produced any, each clearly
+    timestamped as a background computation.
+
+--------------------------------------------------------------------------------
+JOURNEY D: JUDGE / EVALUATOR WALKTHROUGH (what you actually perform live)
+--------------------------------------------------------------------------------
+D1. Show the kit's network interface being disabled.
+D2. Briefly show Journey A (or re-open the Department & Incident-Type
+    Editor to prove the form-per-type setup is real and local, not
+    hard-coded).
+D3. Run Journey B end to end at least twice:
+      - Once in English, hitting at least one "I don't know" and one
+        clarifying question.
+      - Once in Hindi/code-mixed, hitting a disambiguation question.
+      - In at least one run, demonstrate barge-in (interrupt a spoken
+        question) and a REVIEW correction.
+D4. Run Journey C live alongside B: show the queue row and map pin appear
+    together the instant B7 completes; open the dossier; show the
+    function-call log and field-provenance/status for that incident.
+D5. (Stretch, only if Phase 4 work landed) submit a second incident
+    related to the first and show a GNN "possibly related" flag,
+    correctly caveated.
+D6. (Stretch) show the Trend View as the "where this goes next" beat.
+================================================================================

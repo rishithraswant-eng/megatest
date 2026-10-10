@@ -1,0 +1,248 @@
+================================================================================
+TECHNICAL REQUIREMENTS DOCUMENT (TRD) - REV. 2
+AI Incident Report Assistant - 100% On-Device Build
+Updated: named model candidates replace earlier generic size budgets;
+streaming/concurrency/reliability requirements added; GNN/DynoTears moved
+to an optional appendix.
+================================================================================
+
+1. HARDWARE TARGET
+--------------------------------------------------------------------------------
+  - Qualcomm Innovators Development Kit (QIDK), Snapdragon-based.
+  - OPEN ITEM: exact QIDK chipset variant, RAM, and OS build are still
+    pending confirmation -- this must be nailed down at the very start of
+    kit-bound work (Phase 1), since every model-size decision below
+    depends on it.
+  - Peripherals required: microphone (input), speaker (output), a
+    connected display/touchscreen for the map, department queues, and
+    dossier UI.
+  - No internet connection required at run time. The full flow -- including
+    department routing and form completion -- is demoed with the kit's
+    network interface disabled.
+
+2. SOFTWARE / RUNTIME STACK
+--------------------------------------------------------------------------------
+  - QAIRT (Qualcomm AI Runtime) / QNN for on-device model execution,
+    targeting the Hexagon NPU where supported.
+  - Models sourced/exported in a QNN-compatible format (ONNX -> QNN, or
+    directly from Qualcomm AI Hub where a Snapdragon-ready build exists).
+  - Local SQLite database (see 02_DATABASE_SCHEMA.txt) for all persistent
+    state -- no external DB service.
+  - All inter-process communication (UI <-> inference engine <-> DB) stays
+    on-device. This is internal plumbing, not an external API, and does
+    not violate the no-cloud-API constraint.
+
+3. MODEL SHORTLIST -- NAMED CANDIDATES, SELECTED BY ON-DEVICE MEASUREMENT
+--------------------------------------------------------------------------------
+These replace the earlier generic parameter-budget placeholders. None of
+these are final -- each row lists what to benchmark and the specific
+caveat that benchmark needs to check.
+
+  (a) STREAMING ASR
+      Candidates : multilingual Whisper-Base/Small  vs.  Qwen3-ASR-0.6B
+      Must verify: Hindi accuracy, code-mixed accuracy, room names and
+                   equipment IDs, performance under real workplace noise,
+                   and genuine streaming behavior.
+      Known caveat: the listed Whisper exports use a FIXED 30-second input
+                   window. Chunking audio into 30s blocks is not the same
+                   as native low-latency streaming with stable/final
+                   transcript markers -- Qwen3-ASR-0.6B documents native
+                   streaming + Hindi support, but its exact acceleration
+                   on this specific kit is unverified and must be
+                   benchmarked, not assumed from its documentation.
+
+  (b) LNN - CONTINUOUS UNDERSTANDING LAYER
+      Candidate A: a custom CfC (Closed-form Continuous-time) network with
+                   three heads -- incident classification, dialogue-act
+                   detection, candidate field extraction. Size, required
+                   training data, and Snapdragon accelerator compatibility
+                   are all unproven; this is the highest-research-risk
+                   component in the whole stack.
+      Candidate B: a pretrained Liquid AI model -- LFM2.5-230M or
+                   LFM2.5-1.2B-Instruct -- IF "LNN" is interpreted as this
+                   family rather than a custom LTC/CfC layer. These are
+                   hybrid convolution/attention architectures, not a
+                   drop-in swap for Candidate A -- different integration
+                   work, different training story.
+      Hard caveat (applies to both candidates): do NOT assume this layer
+                   can translate Hindi. LFM2.5's documented languages omit
+                   Hindi entirely, and a custom CfC network has no
+                   language understanding unless it is specifically
+                   trained with Hindi/code-mixed data. Either requires an
+                   explicit adaptation step, or Hindi/code-mixed handling
+                   has to be carried by the ASR + semantic model instead
+                   of this layer -- THIS DECISION IS NOT YET MADE and is a
+                   required Phase 1 output, not an assumption to build on.
+      Rollout rule: start with tentative-only predictions (always verified
+                   by the semantic model); only let the LNN complete a
+                   given task unverified once measured validation shows
+                   adequate accuracy on that specific task.
+
+  (c) ON-DEVICE SEMANTIC LANGUAGE MODEL
+      Candidates : Qwen3-1.7B (thinking mode disabled) as the
+                   quality-oriented option; Qwen3-0.6B and Qwen3.5-0.8B as
+                   faster/lighter alternatives.
+      Role       : ambiguous narration, complex corrections, contradiction
+                   handling, difficult extraction, contextual
+                   clarification questions, and local function-call
+                   decisions. Also verifies the LNN's free-form extraction
+                   until that specific task is validated (see 3b).
+      Must verify: per-turn latency against the P95 targets in section 6,
+                   measured on-device, across all three size candidates.
+
+  (d) TEXT-TO-SPEECH
+      Candidates : an accelerated MeloTTS-EN build, and a compatible
+                   Kokoro-82M export.
+      Requirement: common questions cached/pre-synthesized; dynamic
+                   content (summaries, correction read-backs) synthesized
+                   on demand; playback must be interruptible (barge-in).
+
+  (e) NOTED, NOT A CANDIDATE
+      LFM2.5-Audio-1.5B is an English-only research model -- explicitly
+      excluded from the Hindi/code-mixed production path.
+
+  SELECTION RULE (applies to all of the above): the shipped pipeline is
+  chosen by measured report accuracy, total completion time, tail (P95+)
+  latency, memory footprint, power draw, and thermal behavior, all
+  measured on the actual physical kit -- never by spec-sheet comparison
+  alone. This is Phase 1's core deliverable (see 08_IMPLEMENTATION_PLAN.txt).
+
+4. APPLICATION-LAYER RESPONSIBILITIES (NOT MODEL-DEPENDENT -- CAN BE BUILT
+   WITHOUT THE KIT)
+--------------------------------------------------------------------------------
+  - Form schemas, field validation, conversation state, question
+    selection, priority/routing rules, persistence, and the
+    confirmation/submission gates all live in application code, reading
+    from the local database (incident_types, form_fields -- see
+    02_DATABASE_SCHEMA.txt). Model predictions only ever PROPOSE updates;
+    validated application state is the source of truth.
+  - This separation is deliberate: it is what allows the routing/form
+    engine and the review/correction/versioning logic to be built and
+    fully tested against stubbed model outputs, with no kit involved (see
+    08_IMPLEMENTATION_PLAN.txt, Phases 3-4).
+
+5. FUNCTION CALLING CONTRACT (SEMANTIC MODEL <-> LOCAL FUNCTIONS)
+--------------------------------------------------------------------------------
+All functions are local, synchronous, drawn from a FIXED, TYPED,
+ALLOWLISTED set -- the model cannot invoke anything outside this list, and
+every call is logged (function_calls table).
+
+  get_incident_type_candidates(description_en: string) -> {
+      candidates: [{incident_type_id, label, department_id, confidence}]
+  }
+  Purpose: propose incident type + department during stage B (IDENTIFY).
+
+  get_form_fields(incident_type_id: string) -> {
+      required: [field...], clarifying: [field...]
+  }
+  Purpose: load the department-specific form once the type is resolved
+  (or provisionally resolved).
+
+  get_zone_details(zone_name: string) -> {
+      zone_id, name, floor, category_hints[]
+  }
+  Purpose: resolve a spoken zone reference. Failure mode: no confident
+  match -> model must ask, never guess.
+
+  get_zone_incident_history(zone_id: string, lookback_days: int) -> {
+      incidents: [{incident_id, incident_type, priority, reported_at}, ...]
+  }
+
+  classify_priority(description_en: string, incident_type_id: string) -> {
+      priority: "Low"|"Medium"|"High", rationale: string
+  }
+
+6. LATENCY, CONCURRENCY, AND STREAMING REQUIREMENTS
+--------------------------------------------------------------------------------
+  P95 design targets (engineering targets, not yet measured guarantees --
+  must be re-validated on the actual kit once hardware is confirmed):
+    Listening feedback shown to user          : under 100 ms
+    Stop TTS playback once user speech starts : under 150 ms
+    First next-question audio, fast/LNN path  : under 1 s after speech ends
+    First next-question audio, semantic path  : under 2 s after speech ends
+
+  Streaming ASR requirements:
+    - Incremental transcripts with explicit stable/final markers; a
+      "tentative" word can be revised before being marked final.
+    - No arbitrary fixed-duration cutoff -- turn-end is detected from the
+      audio itself (natural pause detection), not a timer.
+
+  Concurrency/staleness protection:
+    - Every model job carries session_id + turn_id + draft_revision.
+    - A result computed against an older draft_revision is discarded if a
+      newer revision exists by the time it returns -- it can never
+      overwrite a newer user correction.
+
+  Interruption handling:
+    - The user can barge in on TTS playback at any time; playback must
+      stop within the 150ms target above and the system transitions
+      straight to listening.
+    - Echo cancellation is required so the device's own TTS output is
+      never transcribed as user speech.
+
+  Resource scheduling:
+    - Audio capture and response generation are prioritized over any
+      background job (see section 8) -- nothing analytical may add
+      latency to the live conversation.
+
+7. RELIABILITY AND DATA-TRUST REQUIREMENTS
+--------------------------------------------------------------------------------
+  - Transactions around any multi-table write (e.g. SUBMIT writing
+    incidents + updating draft_sessions.state together).
+  - Duplicate-submission protection (idempotent SUBMIT, keyed on
+    session_id + confirmed_revision).
+  - Admin authentication and role levels (admin_credentials table).
+  - Protected local storage and data-retention controls for voice/text
+    content.
+  - Schema, routing-rule, and model-weight versioning with rollback
+    (schema_versions / model_versions table).
+  - Every field stores value + evidence (transcript span) + provenance
+    (lnn/llm/user_direct) + status (missing/known/unknown/ambiguous).
+    Original transcripts and full correction history are preserved, never
+    overwritten (see 02_DATABASE_SCHEMA.txt: extracted_fields,
+    correction_history).
+  - Model confidence is explicitly NOT a calibrated probability -- it may
+    drive UX/routing decisions only, never be presented to a user or admin
+    as a trustworthiness guarantee.
+
+8. VALIDATION / TESTING PLAN
+--------------------------------------------------------------------------------
+  - Held-out recordings spanning: both languages, code-mixing, multiple
+    speakers, multiple incident types, background noise, user
+    interruptions, negation, "I don't know" answers, and corrections.
+  - Metrics tracked: per-field extraction accuracy, routing (incident
+    type/department) accuracy, false-fill rate (a field marked "known"
+    that was actually wrong), hazard-question recall, repeated-question
+    rate (the system re-asking something already known -- a hard failure
+    per the core idea), completion rate, and end-to-end latency against
+    section 6's targets.
+  - Models are trained/fine-tuned OFFLINE and released as reviewed,
+    versioned builds. No model is updated live against production
+    conversations.
+
+9. OFFLINE / "NO API" VERIFICATION PLAN
+--------------------------------------------------------------------------------
+  - Demo script disables the kit's network interface before running the
+    live flow, including department routing/form loading, to prove the
+    on-device claim live.
+  - Code review checklist: no HTTP client call in the codebase targets any
+    host other than localhost/the device's own loopback interface.
+  - All model weights are bundled/pre-loaded ahead of time; no
+    "first-run download" behavior during a demo.
+
+10. APPENDIX - OPTIONAL / FUTURE: RELATIONAL AND CAUSAL ANALYTICS
+--------------------------------------------------------------------------------
+Per 01_IDEA_OVERVIEW.txt section 9, these are NOT committed for the core
+build:
+  - GNN-style incident-relatedness inference over a small local graph
+    (zones/incident_types/incidents).
+  - A DynoTears-style periodic local batch job estimating causal factors
+    behind incident categories.
+  Constraints if built at all: inference-only at runtime (no on-device
+  training), bounded resource use, strictly background/non-blocking to the
+  live conversation, and the UI must never present a computed correlation
+  as a verified cause. See 02_DATABASE_SCHEMA.txt (incident_relations,
+  causal_edges) for the schema already reserved for this, and
+  08_IMPLEMENTATION_PLAN.txt Phase 4 for where this is prototyped if time
+  allows.
+================================================================================

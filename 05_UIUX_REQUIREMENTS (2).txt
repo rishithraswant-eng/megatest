@@ -1,0 +1,206 @@
+================================================================================
+UI/UX REQUIREMENTS - REV. 2
+AI Incident Report Assistant
+Updated for: streaming captions with tentative/final distinction, barge-in,
+dynamic department/form display, 4-action review screen, department
+queues, draft recovery, and the open Hindi-output-comprehension risk.
+================================================================================
+
+0. GENERAL PRINCIPLES
+--------------------------------------------------------------------------------
+  - Everything renders on the display connected to the QIDK itself.
+  - Two modes, one app: Admin Mode and User Mode, switched by a visible
+    toggle/login on the same screen.
+  - Voice is the primary interface for User Mode; touch is secondary
+    (choosing output options, tapping a correction target, resuming a
+    draft) -- never required to type a sentence.
+  - Bilingual input never requires pre-selecting a language.
+  - The UI must make the LNN/semantic-model/form-routing pipeline's state
+    legible to a non-technical viewer without narration: which stage is
+    active, whether a value is tentative or confirmed, and whether the
+    system is still listening, thinking, or speaking should all be
+    visually obvious.
+  - OPEN UX RISK, FLAG VISIBLY IN TESTING: the assistant's questions and
+    summaries are English-only even when the user spoke Hindi. This has
+    NOT been validated with Hindi-speaking users. Usability testing must
+    specifically check comprehension of English follow-up questions after
+    a Hindi narration -- do not treat this as solved.
+
+1. ADMIN MODE SCREENS
+--------------------------------------------------------------------------------
+  1.1 Environment Setup
+      - "Create environment" form: name, floor-plan image upload.
+
+  1.2 Zone Editor
+      - Draw polygons on the floor-plan image; name each zone, set floor
+        label, tag category hints (now referencing incident_types, not a
+        flat category list).
+
+  1.3 Department & Incident-Type Editor  (NEW, replaces the old flat
+      Taxonomy Editor)
+      - Manage departments (name, description).
+      - Manage incident types: label, assigned department, default
+        priority, responsible roles, disambiguation hint.
+      - Manage each incident type's FORM: add/remove/reorder required and
+        clarifying fields, each with a field name, data type (text/enum/
+        datetime/boolean), enum values if applicable, and the cached
+        prompt text spoken/shown when asking for it.
+      - This screen is effectively a form-builder -- it must stay usable
+        under hackathon time pressure (quick add, inline edit, no modal
+        maze).
+
+  1.4 Admin Accounts  (NEW)
+      - Create/manage admin logins and role levels (facilities_admin /
+        department_admin / super_admin). Minimal but real -- not a stub,
+        since local auth is a stated reliability requirement.
+
+  1.5 Department Queues  (NEW, primary admin screen alongside the map)
+      - One queue per department: list of incidents with status
+        (Open/In Progress/Resolved), priority, zone, and reported time.
+      - Department-scoped admins see only their department's queue;
+        super_admin sees all.
+      - Filter by status/priority; click any row to open the Dossier
+        Panel (1.7).
+
+  1.6 Live Map Dashboard
+      - Full floor-plan with zone outlines; any zone with an Open incident
+        highlighted by priority (color + text label, never color alone).
+      - Pins anchored per incident, labeled with reporter name on
+        hover/tap. Clicking a pin opens the Dossier Panel.
+      - A visible, permanent label or legend clarifying "pins show where
+        an incident was reported -- not live employee location" (the
+        source idea explicitly calls this out; the UI must not imply
+        tracking).
+      - (Optional/future) if GNN relation data exists, a subtle connecting
+        indicator between related pins, clearly labeled "possibly
+        related," never "same cause."
+
+  1.7 Dossier Panel (opened from a queue row or a pin)
+      - Structured fields in order: Incident ID, Reporter, Zone, Reported
+        At, Incident Time, Incident Type, Department, Priority, Status,
+        Description (English), each required/clarifying field with its
+        value AND its status (known/unknown/ambiguous) shown -- not just
+        a blank for unknowns, an explicit "Not specified (user didn't
+        know)" so admins don't mistake silence for missing effort.
+      - "Play audio summary" button.
+      - Status change control (Open -> In Progress -> Resolved).
+      - (Optional/future) "Possibly related incidents" section if GNN data
+        exists, each clickable, each carrying the same "possibly related"
+        language.
+
+  1.8 Trend View (optional/future, admin-only)
+      - DynoTears-style causal_edges, if implemented, shown as a plain
+        list with strength and a visible "background job, last computed
+        at <timestamp>" label -- never phrased as real-time or as proven
+        causation.
+
+2. USER MODE SCREENS
+--------------------------------------------------------------------------------
+  2.1 Home / Report Screen
+      - Large centered mic button.
+      - Live caption area showing the growing transcript as the user
+        speaks, with a visual distinction between TENTATIVE text (still
+        revisable) and FINAL text (locked in) -- e.g. dimmer/italic for
+        tentative, solid for final. This directly reflects the
+        streaming-ASR requirement in 03_TRD.txt and must not be faked with
+        a single "transcribing..." spinner.
+      - A small detected-language tag (EN/HI/MIXED) shown after the fact,
+        no pre-selection control.
+      - If a resumable draft exists (see 2.7), a "Resume previous report"
+        option appears here instead of silently discarding it.
+
+  2.2 Listening / Thinking State
+      - Mic shows an active waveform while capturing.
+      - A distinct "thinking" indicator differentiates the fast LNN-only
+        pass from a slower pass that involves the semantic model and
+        function calls (e.g. a lighter pulse vs. a more deliberate
+        spinner) -- the two should feel visibly different in speed and
+        weight, since that difference is the architecture's whole point.
+      - No arbitrary countdown/timer visible to the user -- there is none
+        in the system, and showing one would misrepresent the design.
+
+  2.3 Identify Screen (NEW -- the IDENTIFY stage made visible)
+      - Shows the provisionally identified incident type and department as
+        a clearly marked "still confirming..." chip until routing is
+        locked in by STEP 5 of the design flow.
+      - If a disambiguating question is asked, it is presented like any
+        other follow-up (2.4) but visually tagged "which kind of issue is
+        this?" so the user understands why they're being asked something
+        that sounds like a category choice rather than a detail.
+
+  2.4 Follow-up / Form-Filling Screen
+      - Assistant's question shown as large text AND auto-played via TTS.
+      - Mic re-activates automatically for the reply.
+      - A running checklist of the current form's REQUIRED fields, each
+        shown with a 4-state indicator (not just checked/unchecked):
+        Missing / Known / Unknown / Ambiguous -- using both an icon and a
+        text label for each state, consistent with the no-color-alone
+        rule.
+      - User can say "I don't know" at any point and see that field flip
+        to the explicit "Unknown" state rather than staying blank.
+      - Barge-in: tapping or speaking during TTS playback stops it
+        immediately and the UI switches to listening without waiting for
+        the question to finish.
+
+  2.5 Clarifying Screen
+      - Visually distinguished from 2.4 (e.g. a subtitle "A few more
+        details that help the response team") so the user understands
+        these are optional/bounded, not more required fields.
+      - A visible, always-available "That's enough, continue" action
+        (voice or tap) that moves straight to REVIEW.
+
+  2.6 Review / Confirmation Screen
+      - Assistant's spoken + written summary of the current revision,
+        covering all required and answered-clarifying fields, with
+        unknowns clearly marked.
+      - FOUR actions, not two: "Confirm," "Correct a detail" (opens a
+        voice-driven correction for the named field, matching Design Flow
+        step 7), "Skip remaining clarification" (only shown if clarifying
+        questions were still pending), and "Cancel."
+      - After any correction, the summary re-plays before asking for
+        confirmation again -- confirmation never silently carries over
+        across a correction.
+      - This screen is explicitly labeled "Review" in the UI, matching the
+        PS's own named stage.
+
+  2.7 Draft Recovery Prompt (NEW)
+      - Shown on app (re)start if a non-abandoned draft session exists:
+        "Continue your report about [provisional incident type/zone]?"
+        with Resume / Discard options.
+
+  2.8 Done Screen
+      - Shows the finished report summary and/or plays the audio summary.
+      - Explicitly labels it as saved locally -- the UI never implies the
+        responding department has been "notified" unless an actual
+        delivery mechanism exists and has confirmed it (per
+        local_submission_only in the schema).
+      - "Report Another Incident" starts a fresh draft session.
+
+3. ACCESSIBILITY AND LANGUAGE UX RULES
+--------------------------------------------------------------------------------
+  - Live captions during SPEAK render in whatever language/mix the user
+    actually used, so they can see they were heard in their own words,
+    before any normalization.
+  - All assistant-authored text/speech (questions, summaries) is
+    English-only per current scope -- but see the open risk flagged in
+    section 0; do not quietly drop that caveat from future revisions of
+    this file until it's actually been tested.
+  - Status/priority always paired with both color and text/iconography.
+  - All primary actions in User Mode must be completable by voice alone;
+    touch is a fallback/shortcut only.
+  - Kiosk-appropriate font sizes/contrast, legible from a short distance.
+
+4. VISUAL/BRAND NOTES
+--------------------------------------------------------------------------------
+  - Clean, low-saturation base palette; saturated color reserved for
+    priority/status signals.
+  - The one deliberately delightful moment remains the map highlight pulse
+    on SUBMIT -- keep it, it's still the visual payoff of the voice
+    interaction.
+  - The 4-state field indicators (2.4) and the tentative/final caption
+    distinction (2.1) are new, load-bearing UI elements -- they are not
+    decorative, they are how the architecture's honesty (no silent
+    invention, no overwriting newer corrections) becomes visible to the
+    user. Don't let visual polish simplify them back down to a simple
+    checkmark.
+================================================================================

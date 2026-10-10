@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Admin Mode - Setup</title>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        .section { margin-bottom: 30px; padding: 20px; border: 1px solid #ccc; background: #fff; }
+        .flex { display: flex; gap: 20px; }
+        .canvas-container { position: relative; }
+        canvas { border: 1px solid #999; cursor: crosshair; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; font-weight: bold; margin-bottom: 5px; }
+        input, select { padding: 8px; width: 100%; box-sizing: border-box; }
+        button { padding: 10px 15px; background: #007bff; color: white; border: none; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        .list-container { margin-top: 15px; border-top: 1px solid #eee; padding-top: 15px; }
+    </style>
+</head>
+<body>
+    <h1>Admin Mode - Setup</h1>
+
+    <div class="section" id="sec-env">
+        <h2>1. Environment Setup</h2>
+        <form id="envForm">
+            <div class="form-group">
+                <label>Organization Name</label>
+                <input type="text" id="orgName" required>
+            </div>
+            <div class="form-group">
+                <label>Floor-plan Image</label>
+                <input type="file" id="orgImage" accept="image/*" required>
+            </div>
+            <button type="submit">Create Environment</button>
+        </form>
+        <div id="orgResult" style="margin-top:10px; color:green;"></div>
+    </div>
+
+    <div class="section" id="sec-zone" style="display:none;">
+        <h2>2. Zone Editor</h2>
+        <div class="flex">
+            <div style="flex: 1;">
+                <form id="zoneForm">
+                    <div class="form-group">
+                        <label>Zone Name</label>
+                        <input type="text" id="zoneName" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Floor</label>
+                        <input type="text" id="zoneFloor">
+                    </div>
+                    <div class="form-group">
+                        <label>Category Hints (comma separated)</label>
+                        <input type="text" id="zoneHints">
+                    </div>
+                    <p><em>Click on the map to draw a polygon. Click 'Save Zone' when done.</em></p>
+                    <button type="submit">Save Zone</button>
+                    <button type="button" id="clearCanvasBtn" style="background:#dc3545;">Clear Drawing</button>
+                </form>
+            </div>
+            <div class="canvas-container">
+                <canvas id="mapCanvas" width="600" height="400"></canvas>
+            </div>
+        </div>
+        <div class="list-container" id="zoneList"></div>
+    </div>
+
+    <div class="section" id="sec-dept" style="display:none;">
+        <h2>3. Department Editor</h2>
+        <form id="deptForm">
+            <div class="form-group">
+                <label>Department Name</label>
+                <input type="text" id="deptName" required>
+            </div>
+            <div class="form-group">
+                <label>Description</label>
+                <input type="text" id="deptDesc">
+            </div>
+            <button type="submit">Add Department</button>
+        </form>
+        <div class="list-container" id="deptList"></div>
+    </div>
+
+    <div class="section" id="sec-inc" style="display:none;">
+        <h2>4. Incident-Type & Form Builder</h2>
+        <form id="incTypeForm">
+            <div class="form-group">
+                <label>Label (e.g. Water Leak)</label>
+                <input type="text" id="incLabel" required>
+            </div>
+            <div class="form-group">
+                <label>Department</label>
+                <select id="incDept" required></select>
+            </div>
+            <div class="form-group">
+                <label>Default Priority</label>
+                <select id="incPriority">
+                    <option value="Low">Low</option>
+                    <option value="Medium">Medium</option>
+                    <option value="High">High</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Disambiguation Hint</label>
+                <input type="text" id="incDisambig" placeholder="e.g. Is this about the leak itself?">
+            </div>
+            <button type="submit">Add Incident Type</button>
+        </form>
+        <div class="list-container" id="incTypeList"></div>
+        
+        <div id="formBuilder" style="display:none; margin-top: 20px; padding:15px; background:#f9f9f9; border:1px solid #ddd;">
+            <h3>Form Builder for: <span id="currentIncTypeName"></span></h3>
+            <form id="fieldForm">
+                <input type="hidden" id="fieldIncTypeId">
+                <div class="form-group">
+                    <label>Field Name</label>
+                    <input type="text" id="fieldName" required>
+                </div>
+                <div class="form-group">
+                    <label>Kind</label>
+                    <select id="fieldKind">
+                        <option value="required">Required</option>
+                        <option value="clarifying">Clarifying (Optional)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Data Type</label>
+                    <select id="fieldType">
+                        <option value="text">Text</option>
+                        <option value="enum">Enum (Multiple Choice)</option>
+                        <option value="boolean">Boolean</option>
+                        <option value="datetime">DateTime</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Prompt Template (Spoken to user)</label>
+                    <input type="text" id="fieldPrompt" required>
+                </div>
+                <button type="submit">Add Field</button>
+            </form>
+            <div class="list-container" id="fieldList"></div>
+        </div>
+    </div>
+
+    <script src="admin.js"></script>
+</body>
+</html>

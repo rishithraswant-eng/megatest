@@ -1,0 +1,235 @@
+================================================================================
+DESIGN FLOW - SYSTEM / DATA FLOW AND STATE MACHINE - REV. 2
+AI Incident Report Assistant
+Updated to the department/incident-type form-routing flow: SPEAK & BUILD
+CONTEXT -> IDENTIFY TYPE & DEPARTMENT -> COMPLETE FORM -> CLARIFY -> REVIEW
+& CORRECT -> SUBMIT & DISPLAY. GNN/causal analytics moved to an appendix.
+================================================================================
+
+1. HIGH-LEVEL COMPONENT MAP
+--------------------------------------------------------------------------------
+  [Mic] --> [Streaming ASR] --> [LNN: classify / dialogue-act / extract]
+                                         |
+                                         v
+                              [Conversation Manager] <--> [Semantic LLM + function calls]
+                                         |
+                                         v
+                              [Local DB: draft_sessions, extracted_fields, ...]
+                                         |
+                              [TTS] --> [Speaker]   (interruptible, echo-cancelled)
+
+  On SUBMIT:
+  [Local DB] --> [incidents row created from confirmed draft_session]
+  [Local DB] --> [Department Queue view]
+  [Local DB] --> [Map Renderer] --> [Display]
+  [Local DB] --> [Dossier Generator] --> [Display / TTS]
+
+  Optional, background, never on the critical path (see section 6):
+  [Local DB] --> [GNN inference] --> [incident_relations]
+  [Local DB] --> [DynoTears batch job] --> [causal_edges] --> [Admin trend view]
+
+2. END-TO-END DATA FLOW (ONE DRAFT SESSION, TURN BY TURN)
+--------------------------------------------------------------------------------
+  STEP 0  draft_sessions row created (state = LISTENING) the moment the
+          user starts a new report. Everything below is scoped to this
+          session_id and its current_revision.
+
+  STEP 1  SPEAK & BUILD CONTEXT
+          Mic captures audio continuously; Streaming ASR emits incremental
+          transcripts with stable/final markers -- no fixed timer cuts the
+          user off; turn-end comes from detected natural pauses.
+          Each chunk is written to dialogue_turns (is_final flag set as
+          appropriate).
+
+  STEP 2  LNN pass (always runs, cheap, continuous):
+            - incident classification (candidate incident_type_id(s))
+            - dialogue-act detection (answer/correction/negation/
+              uncertainty/confirmation) -- relevant from the first turn
+              onward, not just during REVIEW
+            - candidate field extraction against whatever form fields are
+              already known to apply
+          Writes extracted_fields rows (provenance="lnn", status per
+          value, confidence for UX/routing only -- never shown as a
+          trustworthiness score).
+
+  STEP 3  IDENTIFY INCIDENT TYPE AND DEPARTMENT (state -> CLASSIFYING)
+          Conversation Manager checks the LNN's top incident_type
+          candidate(s):
+            - ONE confident candidate -> provisional routing set,
+              get_form_fields() called, proceed to STEP 5 (FORM_FILLING).
+            - MULTIPLE plausible candidates, close confidence -> state ->
+              DISAMBIGUATING: semantic LLM composes a short disambiguating
+              question ("Is this about the leak itself, or the electrical
+              panel it may have affected?"), spoken + shown; answered by
+              voice; loop back to STEP 2 with the answer as new evidence.
+            - Narration implies more than one distinct incident -> a
+              second draft_sessions-linked incident is prepared, sharing
+              linked_group_id, each following its own IDENTIFY/FORM_FILLING
+              independently from here on.
+          Routing remains explicitly PROVISIONAL (not locked) until the
+          required fields in STEP 5 provide enough support.
+
+  STEP 4  (loops back into here from STEP 3 or any later correction)
+          Whenever the LNN's extraction is incomplete, ambiguous, or
+          involves a correction/contradiction, the semantic LLM is invoked:
+          it may call get_zone_details(), get_zone_incident_history(),
+          classify_priority(), get_incident_type_candidates(), or
+          get_form_fields() -- every call logged to function_calls. It
+          either fills/raises confidence on fields (provenance="llm") or
+          produces the next question.
+
+  STEP 5  COMPLETE THE FORM (state -> FORM_FILLING)
+          Conversation Manager reads form_fields for the (provisional)
+          incident_type_id, filters to field_kind="required", and checks
+          extracted_fields for each: already known? already explicitly
+          "unknown"? still missing?
+            - All required fields known or explicitly unknown -> proceed
+              to STEP 6 (CLARIFYING).
+            - Otherwise -> ask for ONE missing required field, but accept
+              and parse whatever the user actually says, since one answer
+              may fill several fields at once (STEP 2/4 run again on the
+              new utterance before re-checking this list). A spoken
+              "I don't know" is accepted and stored as status="unknown" --
+              it does NOT get treated as a retry-needed failure.
+          Never re-asks a field already supported by status="known" or
+          "unknown" at the current revision.
+
+  STEP 6  CLARIFY THE INCIDENT (state -> CLARIFYING)
+          Conversation Manager filters form_fields to field_kind=
+          "clarifying" and still status="missing", ranks by relevance,
+          and asks only while a stopping rule hasn't fired:
+            - diminishing marginal value (estimated), or
+            - user says "that's enough" / equivalent, or
+            - a configured max-clarifying-questions bound is hit.
+          Hazard-relevant clarifying questions are NOT deferred to this
+          stage if they were already triggered earlier (STEP 5 can raise
+          a hazard-flagged required field directly).
+
+  STEP 7  REVIEW AND CORRECT (state -> REVIEWING)
+          Semantic LLM composes a summary of all known/unknown field
+          values at the current revision; spoken (TTS) + shown as text.
+          User response is one of:
+            CONFIRM  -> state -> SUBMITTING (STEP 8), confirmed_revision =
+                        current_revision.
+            CORRECT  -> the named field is re-opened (back through STEP 2/
+                        4 for just that field); draft_sessions.
+                        current_revision increments; correction_history
+                        row written, including which other field_row_ids
+                        this correction invalidates (e.g. a priority value
+                        derived from the now-stale description); REVIEW
+                        replays once the correction is applied.
+            SKIP      -> (only valid for remaining CLARIFYING-stage
+                        questions, not for unresolved required fields) ->
+                        proceed straight to REVIEW's summary with those
+                        fields left "missing".
+            CANCEL    -> state -> CANCELLED; draft_session is retained for
+                        audit but produces no incidents row.
+          A CONFIRM only ever applies to the exact revision summarized --
+          any further correction requires a fresh CONFIRM.
+
+  STEP 8  SUBMIT AND DISPLAY (state -> SUBMITTING -> SUBMITTED)
+          Inside one transaction: incidents row created from the confirmed
+          draft_session + its current extracted_fields; status="Open";
+          local_submission_only=1 (see 02_DATABASE_SCHEMA.txt -- the app
+          never claims delivery beyond local save unless an actual
+          delivery mechanism exists and confirms it).
+          Department Queue view now includes this incident.
+          Map Renderer highlights the zone and places the reporter's pin.
+          (Optional, background) GNN inference may run here -- see section
+          6 -- but SUBMIT does not wait on it.
+
+  STEP 9  Output generation -- dossier view and/or TTS summary, rendered
+          from the incidents row + joined zone/incident_type/department
+          data, available immediately from the Department Queue or the
+          map pin.
+
+3. CONVERSATION STATE MACHINE
+--------------------------------------------------------------------------------
+  STATES:
+    LISTENING
+      -> on utterance finalized: LNN_PASS
+
+    LNN_PASS   (always runs; cheap)
+      -> on no incident_type candidate yet AND still early: back to LISTENING
+      -> on one confident incident_type candidate: FORM_FILLING
+      -> on multiple close candidates: DISAMBIGUATING
+      -> on extraction incomplete/ambiguous for current stage: SEMANTIC_PASS
+
+    DISAMBIGUATING
+      -> assistant asks disambiguating question -> LISTENING (answer)
+         -> back to LNN_PASS with new evidence
+
+    SEMANTIC_PASS   (LLM + function calls; only entered when LNN_PASS can't
+                     resolve the current need)
+      -> on resolved: back to whichever stage triggered it
+                      (FORM_FILLING / CLARIFYING / REVIEWING)
+      -> on still unresolved: ASKING_FOLLOWUP
+
+    ASKING_FOLLOWUP
+      -> assistant speaks question (interruptible) -> LISTENING (answer)
+
+    FORM_FILLING
+      -> on all required fields known/unknown: CLARIFYING
+      -> on fields still missing: ASKING_FOLLOWUP (required-field question)
+
+    CLARIFYING
+      -> on stopping rule fires (diminishing returns / user "enough" /
+         max-question bound): REVIEWING
+      -> on more clarifying value remains: ASKING_FOLLOWUP (clarifying
+         question)
+
+    REVIEWING
+      -> on CONFIRM: SUBMITTING
+      -> on CORRECT: back to LNN_PASS/SEMANTIC_PASS for the corrected
+         field, current_revision++, then back to REVIEWING
+      -> on SKIP (clarifying fields only): REVIEWING (summary without
+         those fields)
+      -> on CANCEL: CANCELLED (terminal)
+
+    SUBMITTING
+      -> write incidents row (transaction), update Department Queue + map
+      -> SUBMITTED
+
+    SUBMITTED / CANCELLED / ABANDONED
+      -> terminal for this draft_session; a new report starts a fresh
+         draft_sessions row
+
+  SAFETY BOUNDS:
+    - A turn counter increments on every LISTENING->LNN_PASS transition.
+      If FORM_FILLING/CLARIFYING exceed a configured max turn count, force
+      a transition to REVIEWING with best-effort values, marking any
+      still-missing required field "unknown" rather than looping forever.
+    - ABANDONED is reached if last_active_at exceeds a configured idle
+      timeout -- draft recovery (section 5) allows resuming instead of
+      losing the session.
+
+4. BARGE-IN / INTERRUPTION FLOW
+--------------------------------------------------------------------------------
+  - At any point TTS is playing (ASKING_FOLLOWUP or REVIEWING), the mic
+    remains live. If user speech is detected, TTS playback is stopped
+    within the target in 03_TRD.txt section 6, and the new speech is
+    treated as the user's actual answer/correction -- it does not need to
+    wait for the question to finish.
+  - Echo cancellation ensures the device's own TTS output is never fed
+    back into the ASR as if it were user speech.
+
+5. DRAFT RECOVERY FLOW
+--------------------------------------------------------------------------------
+  - On app start, if a draft_sessions row exists in a non-terminal state
+    with a recent last_active_at, the UI offers to resume it from its
+    current_revision and state, rather than starting fresh.
+  - If the idle timeout has passed, the session moves to ABANDONED and is
+    excluded from resume offers, but remains in the DB for audit.
+
+6. APPENDIX - OPTIONAL / FUTURE: RELATIONAL AND CAUSAL ANALYTICS FLOW
+--------------------------------------------------------------------------------
+Not committed for the core build (see 01_IDEA_OVERVIEW.txt section 9 and
+03_TRD.txt section 10). If implemented:
+  - GNN inference runs at/after SUBMIT, strictly asynchronous -- SUBMIT's
+    transaction and the map/queue update never wait on it. Results land in
+    incident_relations and are surfaced on the dossier only as "possibly
+    related," never as a confirmed cause.
+  - The DynoTears-style batch job is fully decoupled: triggered on a timer
+    or after N new incidents, reads the incidents log, writes causal_edges,
+    and is never in the call path of STEP 1-9 above.
+================================================================================
