@@ -1,0 +1,28 @@
+{
+  "contract_version": 1,
+  "models": {
+    "asr": {
+      "file": "ggml-base.bin", "version": "replace-with-tested-artifact-version",
+      "backend": "whisper.cpp-cpu", "family": "Whisper", "multilingual": true
+    },
+    "llm": {
+      "file": "qwen3-0.6b-q4_k_m.gguf", "version": "replace-with-tested-artifact-version",
+      "backend": "llama.cpp-cpu", "family": "Qwen3"
+    },
+    "cfc": {
+      "file": "cfc-int8.onnx", "version": "replace-with-trained-artifact-version",
+      "backend": "onnx-cpu", "family": "CfC", "quantization": "int8",
+      "export_contract": "word_ids_mask_v1", "vocabulary": "cfc-vocabulary.json",
+      "max_tokens": 256, "unknown_id": 1, "padding_id": 0,
+      "labels": ["filler", "relevant"], "output_kind": "logits", "threshold": 0.5
+    },
+    "laya": {
+      "file": "laya-int8.onnx", "version": "replace-with-trained-artifact-version",
+      "backend": "onnx-cpu", "family": "Laya", "quantization": "int8",
+      "export_contract": "word_ids_mask_v1", "vocabulary": "laya-vocabulary.json",
+      "max_tokens": 512, "unknown_id": 1, "padding_id": 0,
+      "labels": [], "output_kind": "logits"
+    }
+  },
+  "sha256": {}
+}

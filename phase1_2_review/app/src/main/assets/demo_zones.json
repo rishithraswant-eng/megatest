@@ -1,0 +1,13 @@
+{
+  "note": "Demo zones for the map and zone resolution. Names are matched case-insensitively against the space_id answer, so use the room names people actually say. Rooms come from the incident_taxonomy.json space_id question and seed_phrases; Conference Room 2 and Pantry match the Phase 2 get_zone_details fixtures. Polygons are pixel rectangles on the demo floorplan size below; replace with real surveyed outlines.",
+  "floorplan": { "w_px": 1000, "h_px": 600 },
+  "zones": [
+    { "id": "zone_n1_conf2", "name": "Conference Room 2", "building": "N", "floor": 1, "polygon": [[40, 40], [300, 40], [300, 220], [40, 220]], "incident_types": ["water_leak", "conference_room_av", "hvac_issue"] },
+    { "id": "zone_n1_pantry", "name": "Pantry", "building": "N", "floor": 1, "polygon": [[320, 40], [480, 40], [480, 220], [320, 220]], "incident_types": ["water_leak", "pest_sighting", "spill_cleanup"] },
+    { "id": "zone_n1_cafeteria", "name": "Cafeteria", "building": "N", "floor": 1, "polygon": [[500, 40], [960, 40], [960, 300], [500, 300]], "incident_types": ["cafeteria_issue", "pest_sighting", "spill_cleanup"] },
+    { "id": "zone_n1_washroom_m", "name": "Men's Washroom", "building": "N", "floor": 1, "polygon": [[40, 240], [200, 240], [200, 400], [40, 400]], "incident_types": ["washroom_hygiene", "washroom_plumbing"] },
+    { "id": "zone_n2_server", "name": "Server Room", "building": "N", "floor": 2, "polygon": [[40, 40], [260, 40], [260, 260], [40, 260]], "incident_types": ["hvac_issue", "fire_smoke", "power_outage"] },
+    { "id": "zone_qrc1_rf_lab", "name": "RF Lab", "building": "QRC", "floor": 1, "polygon": [[40, 40], [420, 40], [420, 320], [40, 320]], "incident_types": ["lab_utility_failure", "lab_equipment_fault", "chemical_spill", "access_control_fault"] },
+    { "id": "zone_n0_parking", "name": "Parking", "building": "N", "floor": null, "polygon": [[40, 420], [960, 420], [960, 580], [40, 580]], "incident_types": ["cctv_fault", "suspicious_activity"] }
+  ]
+}

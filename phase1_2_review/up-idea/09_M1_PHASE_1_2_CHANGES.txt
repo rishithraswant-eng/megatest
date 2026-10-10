@@ -1,0 +1,104 @@
+================================================================================
+M1 ALIGNMENT - PHASE 1-2 CHANGELOG AND MERGE HANDOFF
+Date: 2026-10-10
+Source: deliverables/M1.pdf, pages 1-2
+Updated plan: 08_IMPLEMENTATION_PLAN (2).txt, REV. 3
+================================================================================
+
+WHAT CHANGED
+--------------------------------------------------------------------------------
+1. Hardware baseline
+   Before: exact QIDK chipset/runtime was an open item.
+   Now: use M1's Snapdragon 8 Elite SM8750P and QAIRT/SNPE 2.47 as the
+   declared target; still record actual RAM, OS, runtime and model backends.
+   The regular-phone scaffold is a development target, not kit evidence.
+
+2. Model responsibilities
+   Before: CfC or LFM alternatives; LNN classification, dialogue acts and
+   extraction; no separate Laya stage.
+   Now: INT8 CfC only filters relevant sentences; LLM extracts grounded
+   fields and chooses local calls; selected INT8 Laya supplies incident
+   classification in one non-autoregressive pass. ASR/LLM/TTS shortlists
+   remain benchmark choices. Relevant replies, including unknown answers,
+   negations and corrections, must survive filtering.
+
+3. Language and concurrency
+   Before: Hindi-handling owner undecided; generic pipeline wiring.
+   Now: speech path converts English/Hindi/Hinglish into English before
+   CfC/LLM, with original evidence retained. Benchmark a separate local
+   conversion step if the ASR export needs one. CfC screens incoming
+   sentences while the LLM processes previously accepted context.
+   English follow-up comprehension by Hindi speakers is an open test.
+
+4. Classification and deterministic policy
+   Now explicit: 28 types + undetermined/none, probability output, and
+   < 0.6 top-2 confirmation proposals. Two incidents need explicit
+   grouping proposals; one top-1 label is insufficient. The local taxonomy
+   actually contains 28 types and 6 departments.
+   App code still owns department/form routing, P1-P4/SLA/role rules,
+   safety-first questioning, unknown-field states and draft creation.
+   The old TRD's Low/Medium/High classify_priority API conflicts with M1's
+   deterministic P1-P4 policy: reconcile it explicitly at the adapter.
+
+5. Evidence and acceptance gates
+   Added: dataset/artifact inventory, conversation-level split and leakage
+   audits, pre/post-INT8 metrics, and independent human EN/HI/Hinglish audio.
+   M1's 1,164 train + 128 test conversations are declared dataset counts,
+   not newly verified files. M1's CfC 0.7-0.9 ms / 5.1-5.5 MB are reported
+   results to reproduce, not measurements made during this plan edit.
+   Preserve P95 <100 ms listening, <150 ms interruption, <1 s cached
+   question, <2 s LLM question; log clock boundaries and combined load.
+
+6. Android and real-engine handoff
+   Added: nonblocking PCM bridge, sample-rate conversion, pause-based
+   turn endings, transcript revisions, bounded queues, echo cancellation,
+   stale session/turn/draft result rejection and offline artifact manifests.
+   Current scaffold is capture-only: manual WAV recording and its two-minute
+   safety cap do not implement M1's conversational turn policy.
+   Natural conversation capture belongs to Phase 2 implementation.
+
+IMPACT ON EXISTING PHASE 3-4 WORK
+--------------------------------------------------------------------------------
+The Phase 3-5 scope text in the plan was retained. The team's reported
+webapp implementation/tests remain the starting point; their source and
+fixtures were not supplied or inspected in this edit. Android readiness
+and compatibility are therefore pending checks, not established facts.
+
+Keep existing process_turn output keys and enum meanings as the baseline.
+Add versioned metadata or an explicit adapter for relevance, Laya outcomes,
+grouping, streaming and job identity. Optional metadata must remain safe
+for consumers that do not understand it; test exact parser behavior.
+Do not silently replace confidence with a different shape, introduce fake
+incident IDs, rename provenance values or migrate priority labels.
+The original 03_TRD model-role/priority statements remain in that file;
+the M1-aligned Phase 1-2 notes take precedence for this work.
+
+MERGE CHECKLIST FOR THE ANDROID SCAFFOLD
+--------------------------------------------------------------------------------
+[ ] Obtain actual friend's code + stub fixtures; compare process_turn
+    request/output types, IDs, nulls, enums and function result shapes.
+[ ] Match all 28 taxonomy IDs, department IDs and required/clarifying field
+    names to Laya's label map and the existing form fixtures.
+[ ] Agree explicit undetermined/none, top-2 and two-incident output mapping.
+[ ] Reconcile deterministic P1-P4 priority/SLA and the legacy priority API
+    using existing app rule logic; keep unknown safety answers conservative.
+[ ] Replace only engine/repository boundaries during integration; connect
+    the actual SQLite owner without duplicating draft/submission writes.
+[ ] Replay existing Phase 3-4 cases in the Android scaffold: missing fields,
+    known/unknown/ambiguous values, safety-first ordering, no repeated
+    questions, <=4 follow-up questions with <=2 fields each, review correction,
+    revision invalidation, Confirm/Correct/Skip/Cancel and idempotent submit.
+[ ] Exercise real mic/ASR/TTS, source-to-English evidence, interruption,
+    slow/error/stale model outputs and cancellation on Android.
+[ ] Compare recorded real engine outputs with the same consumer cases;
+    log any adapter migration rather than claiming compatibility by shape.
+[ ] Rehearse offline on the kit: reviewed submission writes the local
+    incident, department queue row and map pin consistently; do not claim
+    delivery outside the device without an implemented delivery mechanism.
+
+EDIT STATUS
+--------------------------------------------------------------------------------
+This is a planning/documentation update. It does not install models, train
+CfC/Laya, implement the real Android backend, merge the friend's code or
+claim that physical-device tests have passed.
+================================================================================

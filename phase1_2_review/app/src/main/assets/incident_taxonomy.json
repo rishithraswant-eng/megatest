@@ -1,0 +1,347 @@
+{
+  "meta": {
+    "name": "AI Incident Report Assistant - taxonomy, fields and routing",
+    "version": "0.1",
+    "org_model": "Departments modeled on Qualcomm's Facilities & Security Group (sub-areas: Facilities, Environment Health & Safety, Security), with IT and R&D Labs as partner orgs.",
+    "design_rule": "Everything here is fixed config. The AI never invents fields or routes. The classifier picks incident_type, the LLM only fills the fields listed for that type, and code applies severity + routing rules.",
+    "demo_values_note": "Priorities, SLAs, floors, space types and technician rosters are demo values chosen by the team, not Qualcomm internal data."
+  },
+
+  "priorities": {
+    "P1": { "label": "Critical", "response_sla_min": 15,   "meaning": "Risk to life, active hazard, or site-wide outage. Page on-call immediately." },
+    "P2": { "label": "High",     "response_sla_min": 60,   "meaning": "Spreading damage, security exposure, or work stopped for many people." },
+    "P3": { "label": "Medium",   "response_sla_min": 240,  "meaning": "Contained problem affecting a room or small group." },
+    "P4": { "label": "Low",      "response_sla_min": 1440, "meaning": "Cosmetic or convenience issue. Next business day." }
+  },
+
+  "completion_policy": {
+    "max_followup_turns": 4,
+    "max_fields_per_question": 2,
+    "ask_order": ["safety_critical", "location", "type_required", "occurred_at"],
+    "unknown_answers_allowed": true,
+    "unknown_on_safety_field": "assume_worse_case",
+    "default_occurred_at": "If user says 'just now' or gives no time after one ask, use reported_at and mark approximate.",
+    "evidence_required": "Every user-provided field must carry the transcript span it came from; no span means leave empty."
+  },
+
+  "location_model": {
+    "note": "Qualcomm identifies campus buildings by letter codes (e.g. N, QRC). Floors and spaces below are a demo layout for the map view.",
+    "fields": ["building", "floor", "space_type", "space_id", "landmark"],
+    "required": ["building", "floor", "space_id"],
+    "buildings": [
+      { "code": "N",   "floors": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] },
+      { "code": "QRC", "floors": [1, 2, 3, 4, 5, 6] }
+    ],
+    "space_types": [
+      "conference_room", "workstation_bay", "rnd_lab", "server_or_idf_room", "pantry", "cafeteria",
+      "washroom", "lobby_reception", "elevator_lobby", "stairwell", "corridor", "parking", "loading_dock", "outdoor"
+    ]
+  },
+
+  "common_fields": {
+    "incident_type":           { "source": "classifier", "required": true },
+    "description":             { "source": "llm_summary_of_relevant_sentences", "required": true },
+    "building":                { "source": "user", "required": true,  "type": "enum_ref:location_model.buildings", "question": "Which building are you in?" },
+    "floor":                   { "source": "user", "required": true,  "type": "int",    "question": "Which floor?" },
+    "space_type":              { "source": "user_or_inferred", "required": false, "type": "enum_ref:location_model.space_types" },
+    "space_id":                { "source": "user", "required": true,  "type": "string", "question": "Which room or area exactly, for example Conference Room 2 or the pantry?" },
+    "landmark":                { "source": "user", "required": false, "type": "string" },
+    "occurred_at":             { "source": "user", "required": true,  "type": "datetime_or_relative", "question": "Roughly when did this happen or when did you notice it?" },
+    "immediate_actions_taken": { "source": "user", "required": false, "type": "string" },
+    "persons_involved":        { "source": "user", "required": false, "type": "list[string]" },
+    "witnesses":               { "source": "user", "required": false, "type": "list[string]" },
+    "asset_tag":               { "source": "user", "required": false, "type": "string" },
+    "reporter":                { "source": "device_profile", "required": true }
+  },
+
+  "system_fields": [
+    "report_id", "reported_at", "language_detected", "priority", "department", "assignee_role",
+    "co_notify", "response_due_at", "status", "field_evidence", "classifier_confidence", "recommended_follow_up"
+  ],
+
+  "status_flow": ["submitted", "acknowledged", "dispatched", "on_site", "resolved", "closed"],
+
+  "departments": [
+    {
+      "id": "FAC", "name": "Facilities Engineering", "parent_org": "Facilities & Security Group > Facilities",
+      "roles": [
+        { "id": "plumber",              "name": "Plumbing Technician" },
+        { "id": "electrician",          "name": "Electrical Technician" },
+        { "id": "hvac_tech",            "name": "HVAC Technician" },
+        { "id": "civil_carpentry",      "name": "Civil & Interiors Technician" },
+        { "id": "elevator_vendor",      "name": "Elevator Service (vendor)" }
+      ]
+    },
+    {
+      "id": "HWS", "name": "Housekeeping & Workplace Services", "parent_org": "Facilities & Security Group > Facilities",
+      "roles": [
+        { "id": "housekeeping",         "name": "Housekeeping Staff" },
+        { "id": "cafeteria_ops",        "name": "Cafeteria & Pantry Operations" },
+        { "id": "pest_control_vendor",  "name": "Pest Control (vendor)" }
+      ]
+    },
+    {
+      "id": "SEC", "name": "Global Security", "parent_org": "Facilities & Security Group > Security",
+      "roles": [
+        { "id": "security_officer",     "name": "Security Officer" },
+        { "id": "access_control_tech",  "name": "Security Systems Technician (access control, CCTV)" },
+        { "id": "gsoc_analyst",         "name": "GSOC Analyst (Global Security Operations Center)" }
+      ]
+    },
+    {
+      "id": "EHS", "name": "Environment, Health & Safety", "parent_org": "Facilities & Security Group > Environment Health & Safety",
+      "roles": [
+        { "id": "ehs_engineer",         "name": "EHS Engineer" },
+        { "id": "emergency_response",   "name": "Emergency Response Team / First Aid" }
+      ]
+    },
+    {
+      "id": "ITW", "name": "IT & Workplace Technology", "parent_org": "IT (partner org)",
+      "roles": [
+        { "id": "it_support",           "name": "IT Support Technician" },
+        { "id": "av_tech",              "name": "Conference Room AV Technician" },
+        { "id": "network_engineer",     "name": "Network Engineer" }
+      ]
+    },
+    {
+      "id": "LAB", "name": "R&D Lab Operations", "parent_org": "R&D Labs (partner org)",
+      "roles": [
+        { "id": "lab_technician",       "name": "Lab Technician" },
+        { "id": "lab_facilities_eng",   "name": "Lab Facilities Engineer (bench power, UPS, chillers)" }
+      ]
+    }
+  ],
+
+  "field_library": {
+    "leak_source":            { "type": "enum", "values": ["pipe", "ceiling", "tap_or_fixture", "appliance", "unknown"], "question": "Where is the water coming from: a pipe, the ceiling, a tap, or are you not sure?" },
+    "water_spread":           { "type": "enum", "values": ["contained", "spreading", "unknown"], "safety": true, "question": "Is the water contained, or still spreading?" },
+    "near_electrical":        { "type": "bool", "safety": true, "question": "Is the water near any sockets, cables or equipment?" },
+    "fixture_type":           { "type": "enum", "values": ["toilet", "urinal", "sink", "shower", "drinking_fountain", "other"], "question": "Which fixture is it?" },
+    "plumbing_issue":         { "type": "enum", "values": ["blocked", "overflowing", "no_water", "not_flushing", "dripping", "other"], "question": "What's wrong with it: blocked, overflowing, no water, or something else?" },
+    "outage_scope":           { "type": "enum", "values": ["single_outlet", "room", "floor", "building"], "question": "How much has lost power: one socket, the room, the whole floor, or the building?" },
+    "critical_equipment_affected": { "type": "bool", "safety": true, "question": "Is any lab, server or critical equipment affected?" },
+    "hazard_kind":            { "type": "enum", "values": ["sparks", "exposed_wire", "burning_smell", "hot_outlet", "shock", "other"], "question": "What did you notice: sparks, an exposed wire, a burning smell, or something else?" },
+    "smoke_present":          { "type": "bool", "safety": true, "question": "Is there any smoke?" },
+    "lighting_scope":         { "type": "enum", "values": ["single_light", "several_lights", "whole_area"], "question": "Is it one light or the whole area?" },
+    "hvac_condition":         { "type": "enum", "values": ["too_hot", "too_cold", "no_airflow", "noise", "odor"], "question": "Is it too hot, too cold, no airflow, a noise, or a smell?" },
+    "affected_scope":         { "type": "enum", "values": ["single_spot", "room", "floor"], "question": "Is it just one spot, the whole room, or the floor?" },
+    "elevator_id":            { "type": "string", "question": "Which elevator is it, or where is it located?" },
+    "persons_trapped":        { "type": "bool", "safety": true, "question": "Is anyone stuck inside?" },
+    "damage_kind":            { "type": "enum", "values": ["ceiling_tile", "broken_door", "broken_glass", "floor_damage", "wall_crack", "other"], "question": "What's damaged?" },
+    "falling_or_injury_risk": { "type": "bool", "safety": true, "question": "Could anything fall or hurt someone?" },
+    "furniture_item":         { "type": "string", "question": "Which item needs fixing?" },
+    "spill_substance":        { "type": "enum", "values": ["water", "beverage", "food", "oil", "unknown"], "safety": true, "question": "What was spilled? Water, a drink, food, oil, or you're not sure?" },
+    "slip_hazard":            { "type": "bool", "safety": true, "question": "Is it on a walkway where someone could slip?" },
+    "hygiene_issue":          { "type": "enum", "values": ["dirty", "no_soap", "no_paper", "bad_odor", "bin_full"], "question": "What's the issue: cleanliness, supplies, smell, or a full bin?" },
+    "pest_kind":              { "type": "enum", "values": ["rodent", "cockroach", "insects", "snake", "bird", "other"], "question": "What kind of pest did you see?" },
+    "cafeteria_issue":        { "type": "enum", "values": ["food_quality", "equipment_fault", "hygiene", "other"], "question": "Is it about food quality, equipment, or hygiene?" },
+    "food_safety_concern":    { "type": "bool", "safety": true, "question": "Does anyone feel unwell, or could the food be unsafe?" },
+    "door_state":             { "type": "enum", "values": ["stuck_open", "stuck_closed", "reader_not_working", "alarm_sounding"], "question": "Is the door stuck open, stuck closed, or is the badge reader not working?" },
+    "secure_area":            { "type": "bool", "safety": true, "question": "Is this door to a lab or other restricted area?" },
+    "last_seen":              { "type": "datetime_or_relative", "question": "When and where did you last have your badge?" },
+    "person_description":     { "type": "string", "question": "Can you describe the person?" },
+    "behavior":               { "type": "enum", "values": ["tailgating", "wandering", "photographing", "aggressive", "other"], "safety": true, "question": "What were they doing?" },
+    "asset_kind":             { "type": "enum", "values": ["laptop", "phone", "prototype_device", "dev_board", "documents", "personal_item", "other"], "question": "What's missing?" },
+    "contains_confidential":  { "type": "bool", "safety": true, "question": "Does it contain confidential data or unreleased hardware?" },
+    "camera_location":        { "type": "string", "question": "Which camera, or where is it mounted?" },
+    "injury_kind":            { "type": "enum", "values": ["cut", "fall", "burn", "electric_shock", "fainting", "chest_pain", "other"], "safety": true, "question": "What kind of injury is it?" },
+    "person_conscious":       { "type": "bool", "safety": true, "question": "Is the person conscious and breathing?" },
+    "persons_count":          { "type": "int", "question": "How many people are hurt?" },
+    "fire_visible":           { "type": "bool", "safety": true, "question": "Can you see flames, or only smoke?" },
+    "alarm_triggered":        { "type": "bool", "question": "Has the fire alarm gone off?" },
+    "evacuation_status":      { "type": "enum", "values": ["not_started", "in_progress", "complete"], "question": "Has the area been evacuated?" },
+    "substance_name":         { "type": "string", "safety": true, "question": "Do you know what chemical it is?" },
+    "spill_quantity":         { "type": "enum", "values": ["small", "medium", "large", "unknown"], "question": "Roughly how much: a small splash, a puddle, or a large spill?" },
+    "persons_exposed":        { "type": "bool", "safety": true, "question": "Has anyone touched it or breathed it in?" },
+    "hazard_description":     { "type": "string", "question": "What's the unsafe condition you noticed?" },
+    "network_scope":          { "type": "enum", "values": ["single_user", "room", "floor", "building"], "question": "Is it just you, the room, or the whole floor?" },
+    "connection_type":        { "type": "enum", "values": ["wifi", "wired", "both"], "question": "Is it Wi-Fi, wired, or both?" },
+    "av_equipment":           { "type": "enum", "values": ["display", "video_conferencing", "microphone", "speaker", "room_booking_panel"], "question": "What isn't working: the display, video call system, mic, or speakers?" },
+    "meeting_in_progress":    { "type": "bool", "question": "Is a meeting happening right now?" },
+    "device_kind":            { "type": "enum", "values": ["printer", "scanner", "kiosk", "other"], "question": "Which device is it?" },
+    "equipment_kind":         { "type": "string", "question": "Which lab equipment is it?" },
+    "test_in_progress":       { "type": "bool", "question": "Was a test or measurement running when it failed?" },
+    "esd_issue":              { "type": "enum", "values": ["wrist_strap_tester_fault", "esd_mat_damaged", "grounding_fault", "other"], "question": "What's the ESD problem?" },
+    "lab_utility":            { "type": "enum", "values": ["bench_power", "ups", "compressed_air", "chiller", "fume_hood", "other"], "question": "Which lab utility failed?" }
+  },
+
+  "incident_types": [
+    { "id": "water_leak", "label": "Water leak", "dept": "FAC", "role": "plumber", "default_priority": "P3",
+      "required": ["leak_source", "water_spread", "near_electrical"], "optional": ["immediate_actions_taken"],
+      "rules": [
+        { "when": { "field": "near_electrical", "op": "eq", "value": true }, "set_priority": "P1", "add_notify": ["FAC.electrician", "EHS.ehs_engineer"] },
+        { "when": { "field": "water_spread", "op": "eq", "value": "spreading" }, "set_priority": "P2", "add_notify": ["HWS.housekeeping"] }
+      ],
+      "seed_phrases": ["there's water leaking near conference room 2", "ceiling se paani tapak raha hai", "pipe burst in the pantry"] },
+
+    { "id": "washroom_plumbing", "label": "Washroom plumbing fault", "dept": "FAC", "role": "plumber", "default_priority": "P3",
+      "required": ["fixture_type", "plumbing_issue"], "optional": [],
+      "rules": [ { "when": { "field": "plumbing_issue", "op": "eq", "value": "overflowing" }, "set_priority": "P2", "add_notify": ["HWS.housekeeping"] } ],
+      "seed_phrases": ["toilet is blocked on the 4th floor", "washroom mein paani nahi aa raha"] },
+
+    { "id": "power_outage", "label": "Power outage", "dept": "FAC", "role": "electrician", "default_priority": "P3",
+      "required": ["outage_scope", "critical_equipment_affected"], "optional": [],
+      "rules": [
+        { "when": { "field": "outage_scope", "op": "in", "value": ["floor", "building"] }, "set_priority": "P2" },
+        { "when": { "field": "critical_equipment_affected", "op": "eq", "value": true }, "set_priority": "P1", "add_notify": ["LAB.lab_facilities_eng"] }
+      ],
+      "seed_phrases": ["the whole floor lost power", "light chali gayi hai lab mein"] },
+
+    { "id": "electrical_hazard", "label": "Electrical hazard", "dept": "FAC", "role": "electrician", "default_priority": "P1",
+      "required": ["hazard_kind", "smoke_present"], "optional": ["immediate_actions_taken"],
+      "rules": [ { "when": { "field": "smoke_present", "op": "eq", "value": true }, "set_priority": "P1", "add_notify": ["EHS.emergency_response"] } ],
+      "always_notify": ["EHS.ehs_engineer"],
+      "seed_phrases": ["the socket is sparking", "there's a burning smell from the outlet", "wire khula pada hai"] },
+
+    { "id": "lighting_fault", "label": "Lighting fault", "dept": "FAC", "role": "electrician", "default_priority": "P4",
+      "required": ["lighting_scope"], "optional": [],
+      "rules": [ { "when": { "field": "lighting_scope", "op": "eq", "value": "whole_area" }, "set_priority": "P3" } ],
+      "seed_phrases": ["the light above my desk is flickering", "corridor ki lights band hain"] },
+
+    { "id": "hvac_issue", "label": "Temperature / HVAC issue", "dept": "FAC", "role": "hvac_tech", "default_priority": "P3",
+      "required": ["hvac_condition", "affected_scope"], "optional": [],
+      "rules": [ { "when": { "field": "space_type", "op": "in", "value": ["server_or_idf_room", "rnd_lab"] }, "set_priority": "P2" } ],
+      "seed_phrases": ["it's freezing in this meeting room", "AC kaam nahi kar raha", "server room is getting hot"] },
+
+    { "id": "elevator_fault", "label": "Elevator fault", "dept": "FAC", "role": "elevator_vendor", "default_priority": "P2",
+      "required": ["elevator_id", "persons_trapped"], "optional": [],
+      "rules": [ { "when": { "field": "persons_trapped", "op": "eq", "value": true }, "set_priority": "P1", "add_notify": ["SEC.security_officer", "EHS.emergency_response"] } ],
+      "seed_phrases": ["lift is stuck between floors", "elevator 3 isn't opening"] },
+
+    { "id": "structural_damage", "label": "Building damage", "dept": "FAC", "role": "civil_carpentry", "default_priority": "P3",
+      "required": ["damage_kind", "falling_or_injury_risk"], "optional": [],
+      "rules": [ { "when": { "field": "falling_or_injury_risk", "op": "eq", "value": true }, "set_priority": "P2", "add_notify": ["EHS.ehs_engineer"] } ],
+      "seed_phrases": ["a ceiling tile is hanging loose", "glass door is cracked"] },
+
+    { "id": "furniture_fixture", "label": "Furniture / fixture repair", "dept": "FAC", "role": "civil_carpentry", "default_priority": "P4",
+      "required": ["furniture_item"], "optional": [],
+      "rules": [],
+      "seed_phrases": ["my chair is broken", "desk drawer won't lock"] },
+
+    { "id": "spill_cleanup", "label": "Spill (non-hazardous)", "dept": "HWS", "role": "housekeeping", "default_priority": "P3",
+      "required": ["spill_substance", "slip_hazard"], "optional": [],
+      "rules": [
+        { "when": { "field": "slip_hazard", "op": "eq", "value": true }, "set_priority": "P2" },
+        { "when": { "field": "spill_substance", "op": "eq", "value": "unknown" }, "reroute_to": "chemical_spill" }
+      ],
+      "seed_phrases": ["someone spilled coffee in the corridor", "floor pe oil gira hua hai"] },
+
+    { "id": "washroom_hygiene", "label": "Washroom hygiene / supplies", "dept": "HWS", "role": "housekeeping", "default_priority": "P4",
+      "required": ["hygiene_issue"], "optional": [],
+      "rules": [],
+      "seed_phrases": ["no soap in the men's washroom", "dustbin is overflowing"] },
+
+    { "id": "pest_sighting", "label": "Pest sighting", "dept": "HWS", "role": "pest_control_vendor", "default_priority": "P3",
+      "required": ["pest_kind"], "optional": [],
+      "rules": [
+        { "when": { "field": "space_type", "op": "in", "value": ["pantry", "cafeteria"] }, "set_priority": "P2", "add_notify": ["EHS.ehs_engineer"] },
+        { "when": { "field": "pest_kind", "op": "eq", "value": "snake" }, "set_priority": "P1", "add_notify": ["SEC.security_officer"] }
+      ],
+      "seed_phrases": ["saw a rat near the pantry", "cockroaches in the cafeteria"] },
+
+    { "id": "cafeteria_issue", "label": "Cafeteria / pantry issue", "dept": "HWS", "role": "cafeteria_ops", "default_priority": "P3",
+      "required": ["cafeteria_issue", "food_safety_concern"], "optional": [],
+      "rules": [ { "when": { "field": "food_safety_concern", "op": "eq", "value": true }, "set_priority": "P2", "add_notify": ["EHS.ehs_engineer"] } ],
+      "seed_phrases": ["the coffee machine is leaking", "food smells off today"] },
+
+    { "id": "access_control_fault", "label": "Door / badge reader fault", "dept": "SEC", "role": "access_control_tech", "default_priority": "P3",
+      "required": ["door_state", "secure_area"], "optional": [],
+      "rules": [ { "when": { "field": "secure_area", "op": "eq", "value": true }, "set_priority": "P2", "add_notify": ["SEC.security_officer"] } ],
+      "seed_phrases": ["the lab door is stuck open", "badge reader not working at the entrance"] },
+
+    { "id": "lost_badge", "label": "Lost badge", "dept": "SEC", "role": "gsoc_analyst", "default_priority": "P3",
+      "required": ["last_seen"], "optional": [],
+      "rules": [],
+      "seed_phrases": ["I lost my badge", "mera ID card kho gaya"] },
+
+    { "id": "suspicious_activity", "label": "Suspicious person / tailgating", "dept": "SEC", "role": "security_officer", "default_priority": "P2",
+      "required": ["person_description", "behavior"], "optional": ["witnesses"],
+      "rules": [ { "when": { "field": "behavior", "op": "eq", "value": "aggressive" }, "set_priority": "P1", "add_notify": ["SEC.gsoc_analyst"] } ],
+      "seed_phrases": ["someone followed me in without a badge", "a stranger is taking photos of the lab"] },
+
+    { "id": "theft_missing_asset", "label": "Theft / missing asset", "dept": "SEC", "role": "gsoc_analyst", "default_priority": "P3",
+      "required": ["asset_kind", "contains_confidential"], "optional": ["asset_tag"],
+      "rules": [ { "when": { "field": "contains_confidential", "op": "eq", "value": true }, "set_priority": "P1" } ],
+      "seed_phrases": ["my laptop is missing from my desk", "a prototype board disappeared from the lab"] },
+
+    { "id": "cctv_fault", "label": "CCTV camera fault", "dept": "SEC", "role": "access_control_tech", "default_priority": "P3",
+      "required": ["camera_location"], "optional": [],
+      "rules": [],
+      "seed_phrases": ["the camera at the parking exit is broken"] },
+
+    { "id": "injury_medical", "label": "Injury / medical emergency", "dept": "EHS", "role": "emergency_response", "default_priority": "P2",
+      "required": ["injury_kind", "person_conscious", "persons_count"], "optional": ["persons_involved", "witnesses", "immediate_actions_taken"],
+      "rules": [
+        { "when": { "field": "person_conscious", "op": "in", "value": [false, "unknown"] }, "set_priority": "P1" },
+        { "when": { "field": "injury_kind", "op": "in", "value": ["electric_shock", "chest_pain", "fainting"] }, "set_priority": "P1" }
+      ],
+      "always_notify": ["SEC.security_officer", "EHS.ehs_engineer"],
+      "seed_phrases": ["someone slipped and hurt their leg", "ek banda behosh ho gaya"] },
+
+    { "id": "fire_smoke", "label": "Fire / smoke", "dept": "EHS", "role": "emergency_response", "default_priority": "P1",
+      "required": ["fire_visible", "evacuation_status"], "optional": ["alarm_triggered"],
+      "rules": [],
+      "always_notify": ["SEC.security_officer", "FAC.electrician"],
+      "user_prompt_override": "If there is fire, leave the area and use the emergency number now. I am alerting the response team.",
+      "seed_phrases": ["there's smoke coming from the server room", "aag lagi hai"] },
+
+    { "id": "chemical_spill", "label": "Chemical / hazardous spill", "dept": "EHS", "role": "ehs_engineer", "default_priority": "P2",
+      "required": ["substance_name", "spill_quantity", "persons_exposed"], "optional": [],
+      "rules": [
+        { "when": { "field": "persons_exposed", "op": "in", "value": [true, "unknown"] }, "set_priority": "P1", "add_notify": ["EHS.emergency_response"] },
+        { "when": { "field": "spill_quantity", "op": "eq", "value": "large" }, "set_priority": "P1" }
+      ],
+      "seed_phrases": ["isopropyl alcohol spilled in the lab", "lab mein kuch chemical gir gaya"] },
+
+    { "id": "unsafe_condition", "label": "Near miss / unsafe condition", "dept": "EHS", "role": "ehs_engineer", "default_priority": "P3",
+      "required": ["hazard_description"], "optional": ["witnesses"],
+      "rules": [],
+      "seed_phrases": ["the fire exit is blocked by boxes", "almost tripped over a loose cable"] },
+
+    { "id": "network_outage", "label": "Network outage", "dept": "ITW", "role": "network_engineer", "default_priority": "P3",
+      "required": ["network_scope", "connection_type"], "optional": [],
+      "rules": [ { "when": { "field": "network_scope", "op": "in", "value": ["floor", "building"] }, "set_priority": "P2" } ],
+      "seed_phrases": ["wifi is down on the whole floor", "internet nahi chal raha"] },
+
+    { "id": "conference_room_av", "label": "Conference room AV fault", "dept": "ITW", "role": "av_tech", "default_priority": "P4",
+      "required": ["av_equipment", "meeting_in_progress"], "optional": [],
+      "rules": [ { "when": { "field": "meeting_in_progress", "op": "eq", "value": true }, "set_priority": "P3" } ],
+      "seed_phrases": ["the screen in conference room 2 isn't working", "VC mein awaaz nahi aa rahi"] },
+
+    { "id": "device_fault", "label": "Printer / shared device fault", "dept": "ITW", "role": "it_support", "default_priority": "P4",
+      "required": ["device_kind"], "optional": ["asset_tag"],
+      "rules": [],
+      "seed_phrases": ["printer on 5th floor is jammed"] },
+
+    { "id": "lab_equipment_fault", "label": "Lab equipment fault", "dept": "LAB", "role": "lab_technician", "default_priority": "P3",
+      "required": ["equipment_kind", "test_in_progress"], "optional": ["asset_tag"],
+      "rules": [ { "when": { "field": "test_in_progress", "op": "eq", "value": true }, "set_priority": "P2" } ],
+      "seed_phrases": ["the oscilloscope on bench 4 won't turn on", "spectrum analyzer is giving errors"] },
+
+    { "id": "esd_issue", "label": "ESD control issue", "dept": "LAB", "role": "lab_technician", "default_priority": "P3",
+      "required": ["esd_issue"], "optional": [],
+      "rules": [],
+      "always_notify": ["EHS.ehs_engineer"],
+      "seed_phrases": ["the wrist strap tester is failing", "ESD mat is torn"] },
+
+    { "id": "lab_utility_failure", "label": "Lab utility failure", "dept": "LAB", "role": "lab_facilities_eng", "default_priority": "P2",
+      "required": ["lab_utility", "test_in_progress"], "optional": [],
+      "rules": [],
+      "always_notify": ["FAC.electrician"],
+      "seed_phrases": ["bench power dropped in the RF lab", "the chiller stopped"] }
+  ],
+
+  "global_rules": [
+    { "when": { "field": "any_safety_field", "op": "eq", "value": "unknown" }, "action": "treat_as_worse_case" },
+    { "when": { "field": "transcript_mentions", "op": "in", "value": ["injury", "hurt", "bleeding", "chot"] }, "action": "add_secondary_incident", "type": "injury_medical" },
+    { "when": { "field": "transcript_mentions", "op": "in", "value": ["smoke", "fire", "aag", "dhuan"] }, "action": "add_secondary_incident", "type": "fire_smoke" },
+    { "when": { "field": "classifier_confidence", "op": "lt", "value": 0.6 }, "action": "ask_user_to_confirm_type", "question": "Just to confirm, is this about {top_1_label} or {top_2_label}?" }
+  ],
+
+  "assignment": {
+    "who": "department + role from incident type, plus co_notify list from rules",
+    "when": "response_due_at = reported_at + priorities[priority].response_sla_min",
+    "where": "building + floor + space_id, resolved to a map pin via building map file (to build)",
+    "how_urgent": "priority after all rules applied; highest priority wins when rules conflict"
+  }
+}

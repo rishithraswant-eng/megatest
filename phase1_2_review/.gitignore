@@ -1,0 +1,39 @@
+# Existing research and local material (never publish these).
+/init-idea/
+/.fullerenes/
+/tmp/
+/incident_taxonomy.json
+/install_qnn.py
+/Qualcomm_Problem_Statement_for_MegathonX.pptx.pdf
+/test.bin
+
+# Android / Gradle / workstation state.
+.gradle/
+.kotlin/
+.idea/
+**/build/
+local.properties
+*.iml
+*.jks
+*.keystore
+keystore.properties
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+captures/
+.cxx/
+.externalNativeBuild/
+/third_party/
+
+# Audio and model assets stay local unless deliberately packaged later.
+*.wav
+*.pcm
+*.part
+*.onnx
+*.tflite
+*.gguf
+*.bin
+*.dlc
+*.so

@@ -1,0 +1,388 @@
+================================================================================
+IMPLEMENTATION PLAN - 5 PHASES - REV. 3 (M1 ALIGNMENT, 2026-10-10)
+AI Incident Report Assistant
+Source for this revision: deliverables/M1.pdf, pages 1-2, especially sections
+3, 3.3 and 4. Only Phases 1-2, their interface/handoff notes and dependency
+summary are revised. Phase 3-5 scope text is retained.
+Kit-dependent model work remains in Phases 1-2. Phase 3-4 implementation
+has already been reported by the team as implemented and tested in a
+webapp; Android scaffold testing is next, then the real-engine merge.
+This reported status is not a claim that Android or kit tests have passed.
+Use the existing Phase 3-4 engine contract as the compatibility baseline;
+inspect actual fixtures before adopting the additive M1 metadata below.
+Phase 5 integrates the real engine, app logic and final UI on the kit.
+================================================================================
+
+--------------------------------------------------------------------------------
+THE CONTRACT THAT MAKES THE SPLIT POSSIBLE
+--------------------------------------------------------------------------------
+Phases 3 and 4 do not touch the kit because they are built against a fixed
+"Conversation Engine" interface, not against the real models directly.
+Phase 1-2 owns producing that interface for real, on-device. The existing
+Phase 3-4 stub, fixtures and app logic are the handoff baseline. Phase 1
+documents the actual shapes used by that implementation, then Phase 2
+supplies a compatible adapter and documents any unavoidable migration.
+The Android scaffold currently has a PCM VoiceEngine capture boundary,
+not a completed Conversation Engine. Bridge its AudioFrame stream into
+the real backend without blocking microphone reads; keep app logic behind
+the same turn-output contract used by the webapp fixtures.
+
+Existing minimum shape (preserve names; confirm against friend's fixtures):
+  process_turn(session_id, audio_or_text_input) -> {
+      transcript: {text, is_final, lang_detected},
+      dialogue_act: "answer"|"correction"|"negation"|"uncertainty"|
+                    "confirmation"|null,
+      candidate_incident_types: [{incident_type_id, confidence}],
+      candidate_fields: [{field_name, value, confidence, provenance}],
+      function_calls_made: [{function_name, arguments, result}],
+      assistant_followup_text: string | null,
+      assistant_followup_audio_ref: string | null
+  }
+M1 additions for the Phase 1 contract and Phase 2 adapter:
+  - Input/model jobs: session_id, turn_id, draft_revision; audio input also
+    declares sample rate. Text inputs remain usable for existing fixtures.
+  - Streaming events: segment_id, transcript_revision, tentative/final
+    markers, detected source language and normalized English text. Keep
+    source-language evidence alongside English text; never silently alter
+    room names, floors, times or equipment IDs during conversion.
+  - Optional, versioned metadata: relevance decisions per sentence,
+    Laya probabilities and explicit undetermined/none outcomes, incident
+    grouping for two-incident narration, model/taxonomy versions, timings
+    and logged tool-call IDs. Use an adapter rather than changing existing
+    required keys or provenance enums without a migration agreement.
+  - candidate_incident_types now originates from Laya, not the CfC filter.
+    Its confidence key remains available to the legacy consumer; expose
+    Laya's probability distribution in optional metadata. Scores are not
+    a user-facing guarantee. Do not invent taxonomy IDs for none or
+    undetermined; agree an explicit outcome mapping with existing fixtures.
+  - Candidate fields carry transcript-span evidence and uncertainty;
+    missing/known/unknown/ambiguous remain app-owned field states. The
+    engine proposes values; it never overwrites confirmed app state.
+  - Before dispatching a tool call or emitting a result, reject stale jobs
+    whose session/turn/revision is obsolete. A correction cancels pending
+    work and invalidates the old follow-up audio reference.
+  - Follow-up text/audio are responses to an app-approved question or
+    review request. Selection of missing fields, priority, routing and
+    review/submission gates belongs to the existing Phase 3-4 app logic.
+
+Tool execution is behind this boundary; app policy and DB ownership stay
+with Phases 3-4. Use typed local repository interfaces so the Phase 2
+fixture can later be replaced with the real SQLite repository.
+M1's explicit calls are get_form_fields, get_zone_details and
+get_zone_incident_history: the LLM chooses the call, arguments are checked,
+the local handler executes it, and every request/result/failure is logged.
+Preserve get_incident_type_candidates if the existing contract uses it,
+but have it return Laya proposals plus configured labels/departments.
+The old TRD classify_priority Low/Medium/High signature conflicts with M1:
+priority must come from deterministic P1-P4 rules in incident_taxonomy.json.
+If a legacy caller needs that function, use an explicit adapter to the
+app's rule evaluator; do not let a model guess priority or silently map
+three labels onto four. Record this compatibility issue for the merge.
+These M1 Phase 1-2 notes supersede conflicting older model-role/priority
+statements in 03_TRD (2).txt for this work; that document is not rewritten.
+
+--------------------------------------------------------------------------------
+PHASE 1 - M1 KIT BRING-UP, MODEL VALIDATION AND CONTRACT HANDOFF
+          (kit required; aim to clear this fast -- it unblocks everything)
+--------------------------------------------------------------------------------
+Scope (and only this):
+  - Use M1's declared target: Snapdragon 8 Elite SM8750P dev kit and
+    QAIRT/SNPE 2.47. Record actual device identity, RAM, OS, runtime/build
+    versions and available accelerator backends before model work. Confirm
+    installed QNN/QAIRT/SNPE compatibility; document any difference from
+    M1 instead of assuming the existing Android phone is the target kit.
+  - Bring up one trivial model on-device, including Hexagon execution
+    where supported. Log the backend actually used for every model;
+    silent CPU fallback is not evidence of NPU acceleration.
+  - Speech-path ownership is now explicit: English/Hindi/Hinglish input
+    becomes English text before relevance filtering and extraction. Check
+    whether each shortlisted ASR export provides this conversion. If it
+    does not, specify and benchmark a separate on-device normalization/
+    translation step with source-span mapping and its own latency budget.
+    CfC and Laya do not own translation. Follow-ups are English in M1;
+    test Hindi speakers' understanding as the stated open usability risk.
+  - Benchmark multilingual Whisper-Base/Small vs. Qwen3-ASR-0.6B for
+    streaming stability, pause-based turn endings, noisy EN/HI/Hinglish
+    recordings and preservation of names, floors, times and equipment IDs.
+    A fixed-window export alone does not establish low-latency streaming.
+  - CfC is the selected INT8 sentence relevance filter on Hexagon, not a
+    three-head classifier/extractor and not an LFM replacement shortlist.
+    Reproduce M1's reported 0.7-0.9 ms/pass and 5.1-5.5 MB with the exact
+    artifact, preprocessing, backend, measurement boundary and conditions.
+    Report relevance precision/recall before and after INT8; false drops
+    of hazards, corrections, negations and unknown answers are critical.
+    Preserve relevant conversational context when a short answer depends
+    on the app's current question. Do not assume all short replies are filler.
+  - Laya is the selected non-autoregressive INT8 incident classifier.
+    Obtain its trained artifact, tokenizer/preprocessing, input contract,
+    label-index map and checksum; M1 does not define those implementation
+    details. Verify 28 configured types plus undetermined/none, one-pass
+    outputs and probabilities. Below 0.6, propose top-2 confirmation;
+    the existing app owns the disambiguation decision. Check look-alikes,
+    non-incidents and two-incident proposals. Do not treat one top-1 label
+    as proof that two incidents have been detected.
+  - Benchmark Qwen3-1.7B (no-think), Qwen3-0.6B and Qwen3.5-0.8B for
+    grounded field extraction and genuine allowlisted function calling
+    using relevant English text. Measure combined execution with CfC,
+    not just isolated model timings. The LLM does not invent categories,
+    form fields, departments, priority or SLA.
+  - Benchmark MeloTTS-EN vs. Kokoro-82M for cached and dynamic synthesis,
+    interruptible playback and English-question comprehensibility.
+  - Obtain/audit the dataset described in M1: 1,164 training and 128 test
+    conversations (~3,200 turns, ~7,500 labelled sentences), covering 28
+    types plus undetermined/none, 168 look-alikes, 60 non-incidents and
+    40 two-incident reports. Verify these counts and artifact availability;
+    do not mark them generated, trained or audited merely because M1
+    lists them. Split by conversation, audit label balance, sentence
+    overlap and filler/style/length/location shortcuts, and re-evaluate
+    relevance, type accuracy and field-mention F1 after INT8. If artifacts
+    are missing, training/export and these audits are Phase 1 work.
+  - Build a separate held-out human spoken EN/HI/Hinglish set with multiple
+    speakers and office noise. Report it separately from synthetic tests;
+    M1 treats this as the trusted speech/generalization measurement.
+  - Bring up real-kit microphone/speaker I/O and echo cancellation. Audit
+    the scaffold's mono PCM stream and device sample-rate fallbacks;
+    resample explicitly for each model's required rate.
+  - Inventory the friend's actual Phase 3-4 contracts, DB/form fixtures,
+    nullability, status/provenance enums and test cases. Freeze a versioned
+    adapter specification now so Android app testing can proceed while
+    kit benchmarking continues. Do not require redoing their webapp logic.
+
+Explicitly NOT in this phase:
+  - No conversation-state logic, no form/department routing, no REVIEW
+    behavior, no UI screens, no database schema beyond whatever minimal
+    fixture is needed to run a benchmark.
+
+Exit criteria:
+  - Recorded hardware/runtime identity, explicit speech conversion path,
+    selected ASR/LLM/TTS, and versioned CfC/Laya INT8 artifacts with label
+    mapping. Accuracy, latency, memory and power/thermal results name the
+    device/backend and distinguish new measurements from M1's reported
+    CfC numbers. Unmet targets or missing artifacts remain explicit gaps.
+  - Dataset audit + pre/post-INT8 metrics + human speech evaluation, and
+    the adapter specification for the existing Phase 3-4 implementation.
+
+--------------------------------------------------------------------------------
+PHASE 2 - ON-DEVICE PIPELINE INTEGRATION
+          (kit required; the only other kit-bound phase -- Phases 1 and 2
+          together are the full kit-dependent portion of this project)
+--------------------------------------------------------------------------------
+Scope (and only this):
+  - Wire mic -> streaming ASR/English conversion -> sentence CfC gate ->
+    LLM extraction/local calls -> Laya type proposals -> app-approved
+    response -> interruptible TTS, implementing the versioned turn
+    contract. CfC continues screening new speech while the LLM processes
+    already accepted context; concurrency never bypasses the gate.
+    Document Laya's artifact-defined input and scheduling from Phase 1
+    rather than inventing an input format from M1's diagram.
+  - Bridge Android VoiceEngine/AudioFrame to this backend using bounded
+    queues, explicit resampling, ordered segment/revision events, natural
+    pause detection and cancellation. The scaffold's manual recording
+    stop/two-minute capture cap is not the M1 conversational turn policy;
+    add a conversation capture mode rather than treating WAV save as
+    turn completion. Audio callbacks must return promptly.
+  - Tentative transcripts may update captions; only accepted stable/final
+    evidence reaches persistent candidate updates or tool execution.
+    Preserve source/English span mapping and replayable relevance logs;
+    filler must not reach the LLM extraction context.
+  - Execute the LLM's real typed allowlisted calls against minimal local
+    SQLite fixtures with the same repository boundary as Phase 3-4.
+    Include get_form_fields, get_zone_details and
+    get_zone_incident_history; reject unsupported names/invalid arguments,
+    return unresolved/ambiguous zones explicitly, and log calls/errors.
+    Preserve the existing extra calls through the adapters specified above.
+  - Use incident_taxonomy.json's existing 28 types and 6 departments as
+    fixture config, keeping label IDs identical to Laya and the friend's
+    forms. The engine returns proposals; existing app code owns P1-P4,
+    SLA, role/co-notify rules, safety-first questions and field states.
+  - Exercise proposals for confidence < 0.6, undetermined, none and two
+    incidents against the contract. Export those fixtures for Android
+    app testing; draft creation and confirmation remain app-owned.
+  - Implement real barge-in, immediate inference/playback cancellation
+    where applicable, and echo cancellation. Tag each job/result/tool
+    call with session_id + turn_id + draft_revision; obsolete work must
+    not execute calls or overwrite a correction. Do not synthesize a new
+    question from outdated app state.
+  - Measure M1's P95 targets on the kit with explicit timestamps:
+      listening feedback                          < 100 ms
+      TTS stopped after user interruption          < 150 ms
+      first next-question audio, cached template   < 1 s after turn end
+      first next-question audio, LLM-composed      < 2 s after turn end
+    Include pause-detection delay in reported user-perceived response
+    time; disclose the speech-end/turn-end boundary for all measurements.
+    Cached-question timing includes playback start, not just text output.
+    Tune or document gaps; measure memory, power and thermals over several
+    consecutive reports while models run together.
+  - Re-run the held-out human recordings through the integrated engine
+    for speech conversion, relevance drops, field accuracy/false fills,
+    Laya decisions, tool calls and interruption behavior. App-owned
+    routing, hazard-question recall, repeated questions, review and submit
+    are exercised with the friend's Phase 3-4 code during scaffold/merge
+    testing, rather than reimplemented inside this engine.
+  - Prove raw processing offline on the kit: preload all weights, disable
+    networking before the run, check for non-local runtime hosts and log
+    actual accelerator use. Stub outputs are not this offline proof.
+  - Deliver the Android backend/adapter, exact input/output and streaming
+    event specification, recorded real outputs with compatible fixtures,
+    artifact/version manifest, benchmark report and remaining gaps.
+    Keep the stub selectable for app testing while the real engine is
+    integrated. Confirm parity with the actual Phase 3-4 interface before
+    claiming the handoff is compatible.
+
+Explicitly NOT in this phase:
+  - No department/incident-type routing logic, no form engine, no
+    REVIEW/correction logic, no map/queue UI -- those are app-layer and
+    belong to Phase 3/4/5 even though it would be tempting to sketch them
+    here while the models are already warm.
+
+Exit criteria:
+  - Offline live demo on SM8750P: EN/HI/Hinglish speech -> English
+    transcript -> CfC-gated extraction -> Laya probabilities -> at least
+    one genuine logged local function call -> interruptible spoken
+    response. Include irrelevant speech, a correction/unknown answer and
+    interruption; report measured P95/memory/thermal results and gaps.
+  - Adapter passes the existing stub/consumer contract cases, including
+    stale revision rejection and explicit non-incident/uncertain outputs.
+    Android capture integration has been exercised on a physical device;
+    a webapp-only test does not satisfy this exit criterion.
+  - Kit tuning may continue independently. Phase 3-4 scaffold testing can
+    proceed with the stub; Phase 5 still requires the kit for the real
+    integrated reporting flow. No full-app completion is claimed here.
+
+--------------------------------------------------------------------------------
+PHASE 3 - ROUTING AND FORM ENGINE  (NO KIT NEEDED -- PARALLEL WORK-STREAM A)
+--------------------------------------------------------------------------------
+Can start the moment Phase 2's interface is frozen (does not need to wait
+for Phase 2's on-device tuning to be "done," just for the interface shape
+to be fixed) -- and can run at a second location with no kit present.
+
+Scope (and only this):
+  - Full database schema from 02_DATABASE_SCHEMA.txt: organizations,
+    zones, departments, incident_types, form_fields, users,
+    admin_credentials, draft_sessions.
+  - Admin Mode screens for Environment Setup, Zone Editor, and the
+    Department & Incident-Type Editor (05_UIUX_REQUIREMENTS.txt 1.1-1.4),
+    including the form-builder behavior (add/edit/reorder required and
+    clarifying fields per incident type).
+  - The IDENTIFY stage logic: taking a Conversation Engine output
+    (candidate_incident_types), deciding confident-match vs.
+    disambiguation vs. multi-incident-narration, per 04_DESIGN_FLOW.txt
+    steps 3 and the DISAMBIGUATING state.
+  - The FORM_FILLING stage logic: reading form_fields, tracking
+    extracted_fields status (missing/known/unknown/ambiguous), accepting
+    "I don't know," never re-asking a known/unknown field.
+  - The CLARIFYING stage logic: the stopping rule (diminishing returns /
+    user "enough" / max-question bound).
+  - All of the above built and tested against a STUB Conversation Engine
+    (canned/scripted responses matching the frozen interface) -- never
+    against real models.
+
+Explicitly NOT in this phase:
+  - No REVIEW/correction logic, no versioning/rollback, no admin auth
+    enforcement beyond the schema existing, no map/queue rendering, no
+    GNN/DynoTears -- those are Phase 4 or Phase 5.
+
+Exit criteria:
+  - Given a scripted sequence of stub Conversation Engine outputs
+    (including an ambiguous case and a multi-incident case), the
+    routing/form engine correctly identifies type/department, fills the
+    right fields, asks only for genuinely missing ones, and correctly
+    stops clarifying -- fully demonstrable with zero kit involvement.
+
+--------------------------------------------------------------------------------
+PHASE 4 - REVIEW, TRUST, AND RELIABILITY LAYER  (NO KIT NEEDED -- PARALLEL
+          WORK-STREAM B, run alongside Phase 3 at a second location)
+--------------------------------------------------------------------------------
+Can start on the same trigger as Phase 3 (interface frozen) and should be
+staffed/located separately from Phase 3 so both proceed genuinely in
+parallel.
+
+Scope (and only this):
+  - The REVIEW stage logic: composing a summary from current
+    extracted_fields, and the four actions (Confirm / Correct a detail /
+    Skip remaining clarification / Cancel) from 04_DESIGN_FLOW.txt step 7.
+  - Correction handling: field re-opening, draft_revision increment,
+    correction_history rows, and invalidation of derived predictions
+    (e.g. a stale priority classification) tied to a corrected field.
+  - SUBMIT transaction logic: incidents row creation from a confirmed
+    draft_session, duplicate-submission protection, and the
+    local_submission_only flag discipline (never claim delivery without a
+    real mechanism).
+  - admin_credentials auth/role enforcement (not just schema -- actual
+    login + permission checks).
+  - schema_versions/model_versions versioning and rollback plumbing.
+  - The validation/testing harness from 03_TRD.txt section 8: running
+    held-out scripted conversations through the stub engine and
+    computing field accuracy, routing accuracy, false-fill rate,
+    repeated-question rate, completion rate.
+  - (Optional, time-permitting, lowest priority in this phase) a first
+    prototype of the GNN incident-relatedness computation against seeded
+    fixture data, and/or the DynoTears-style batch job -- both still
+    schema-ready and explicitly optional per 03_TRD.txt section 10.
+  - All of the above built and tested against the same STUB Conversation
+    Engine interface used by Phase 3, plus Phase 3's own output (so this
+    phase needs Phase 3's draft_sessions/extracted_fields shape to be
+    real, but not Phase 3's UI).
+
+Explicitly NOT in this phase:
+  - No IDENTIFY/FORM_FILLING/CLARIFYING logic (that's Phase 3's), no UI
+    polish, no map/queue rendering -- Phase 5.
+
+Exit criteria:
+  - Given a stub-driven draft session reaching REVIEW, all four review
+    actions behave correctly (including a correction that properly
+    invalidates a derived field and forces re-confirmation), SUBMIT is
+    idempotent and transactional, admin login/roles are enforced, and the
+    validation harness produces real numbers against at least one
+    scripted held-out conversation set -- all with zero kit involvement.
+
+--------------------------------------------------------------------------------
+PHASE 5 - MERGE, UI, AND APP FORMATION
+          (kit required again, for final integration and rehearsal only)
+--------------------------------------------------------------------------------
+Scope (and only this):
+  - Swap Phase 3/4's stub Conversation Engine for Phase 2's real,
+    on-device one. Fix whatever breaks at the seam (timing assumptions,
+    shape mismatches the stub didn't exercise, real latency changing UX
+    timing).
+  - Build/finish the actual UI screens end to end: all of Admin Mode
+    (1.1-1.8) and User Mode (2.1-2.8) from 05_UIUX_REQUIREMENTS.txt,
+    including the streaming tentative/final caption rendering, the
+    4-state field indicators, barge-in visual feedback, department
+    queues, the live map, and draft recovery prompts.
+  - Full end-to-end integration pass: every journey in 07_APP_FLOW.txt,
+    especially Journey D (the judge walkthrough), run for real on the kit.
+  - Rehearse with the network disabled, timing the full flow, and fixing
+    any rough edges found only once Phase 1-4's pieces are actually
+    talking to each other and to a human.
+
+Explicitly NOT new work in this phase:
+  - No new NLU/model work (Phase 1-2's job), no new routing/form logic
+    (Phase 3's job), no new review/trust logic (Phase 4's job) -- this
+    phase integrates, renders, and rehearses what already exists.
+
+Exit criteria:
+  - Full live run of Journey D from 07_APP_FLOW.txt succeeds end to end,
+    offline, on the physical kit: bilingual capture, disambiguation,
+    required-field filling with at least one "I don't know," bounded
+    clarification, a REVIEW correction, SUBMIT, department queue + map
+    pin appearing together, and the function-call/provenance log shown
+    on request.
+
+--------------------------------------------------------------------------------
+DEPENDENCY SUMMARY
+--------------------------------------------------------------------------------
+  Phase 1 (model/artifact validation + existing contract inventory)
+       --> Phase 2 (real engine + compatible Android adapter) --------\
+  Phase 3-4 (webapp implementation reported, now scaffold tests) ------+--> Phase 5
+
+  Phases 1-2 need the kit for model/accelerator evidence. Freeze the
+  compatibility contract in Phase 1; do not block ongoing Phase 3-4
+  Android testing on completion of Phase 2 kit tuning.
+  Phase 3-4 scope above is retained from REV. 2; its original "can start"
+  wording describes the original work split, not a request to restart
+  completed implementation. Use actual fixtures as the handoff baseline.
+  Phase 5 needs the real Phase 2 backend, Android-tested Phase 3-4 logic
+  and a joint offline rehearsal on the kit. Contract, taxonomy, priority,
+  persistence and audio timing gaps must be resolved at that seam.
+================================================================================
