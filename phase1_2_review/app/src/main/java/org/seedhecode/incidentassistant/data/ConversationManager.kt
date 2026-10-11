@@ -80,6 +80,28 @@ class ConversationManager(private val database: IncidentDatabase) {
         formFields(session.proposedIncidentTypeId, kind).firstOrNull { fieldStatus(sessionId, it.fieldId) in OPEN_STATUSES }?.promptTemplate
     }
 
+    /**
+     * Manual IDENTIFY for bundles without Laya (ASR_LLM): the reporter picks the incident type. From there it is
+     * exactly what a confident classification does in [processTurn]: set the type, enter FORM_FILLING, and apply the
+     * fields extracted from [turn] (the narration that left the draft unclassified) through [fillAndCascade].
+     * [turn] may be null (e.g. the activity was recreated, or the linked half of a split): then nothing is pre-filled.
+     */
+    fun confirmIncidentType(sessionId: String, incidentTypeId: String, turn: TurnResult?): TurnOutcome = database.writableDatabase.inTransaction {
+        val session = session(sessionId)
+        require(session.state in setOf(SessionState.LISTENING, SessionState.CLASSIFYING, SessionState.DISAMBIGUATING)) {
+            "This report already has an incident type."
+        }
+        require(string("SELECT incident_type_id FROM incident_types WHERE incident_type_id = ? AND org_id = ?", incidentTypeId, session.orgId) != null) {
+            "Unknown incident type $incidentTypeId."
+        }
+        execSQL("UPDATE draft_sessions SET proposed_incident_type_id = ?, state = ? WHERE session_id = ?",
+            arrayOf(incidentTypeId, SessionState.FORM_FILLING.name, sessionId))
+        // Extracted fields are only applied with their own turn as evidence: the session's latest turn, from [turn].
+        val evidenceTurnId = string("SELECT turn_id FROM dialogue_turns WHERE session_id = ? ORDER BY turn_index DESC LIMIT 1", sessionId)
+        if (turn != null && evidenceTurnId != null && turn.key.sessionId == sessionId) fillAndCascade(sessionId, StageInput.of(turn), evidenceTurnId)
+        else fillAndCascade(sessionId, StageInput.CLEAN, evidenceTurnId ?: "") // CLEAN writes no field, so no evidence id is used
+    }
+
     /** IDENTIFY only, without the FORM_FILLING cascade or a dialogue_turns row. */
     internal fun processIdentifyStage(sessionId: String, turn: TurnResult): TurnOutcome =
         database.writableDatabase.inTransaction { identify(session(sessionId), StageInput.of(turn)) }

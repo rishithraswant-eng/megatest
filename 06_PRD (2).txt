@@ -219,4 +219,19 @@ correct before anything is submitted.
   R7  GNN/DynoTears feel bolted-on if rushed. Mitigation: kept strictly
       optional/Phase 4, behind the core flow being solid first (see
       08_IMPLEMENTATION_PLAN.txt).
+  R8  Text-to-speech uses the stock Android TextToSpeech engine, not the
+      accelerated MeloTTS-EN / Kokoro-82M candidates in 03_TRD.txt 3(d).
+      This is a deliberate scope cut under hackathon time pressure, not
+      an oversight: integrating, quantizing and validating a second
+      neural speech model on the kit would compete with the ASR, LNN and
+      semantic-model work the demo depends on. Consequences we accept:
+      voice quality and latency depend on the device's installed offline
+      voice (the app reports when no offline English voice is
+      available), speech is English-only (consistent with section 3
+      scope), and TTS is not counted as an on-device Snapdragon-
+      accelerated model. Barge-in still works because playback is
+      stopped from app code when the user starts speaking. Mitigation:
+      the TTS call sits behind one small wrapper (OfflineSpeaker), so a
+      neural TTS can replace it later without touching the conversation
+      flow.
 ================================================================================

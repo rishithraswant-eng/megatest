@@ -190,6 +190,46 @@ class ReportingWorkflowTest : DatabaseTest() {
         assertEquals(REVIEWING, send(step, "That's enough", stop = true).state)
     }
 
+    @Test fun manuallyChosenTypeContinuesExactlyLikeAConfidentClassification() {
+        val narration = "Water is leaking from a pipe near the sockets in building N"
+        val fields = listOf("description" to "Water leaking from a pipe near the sockets", "leak_source" to "pipe",
+            "near_electrical" to "true", "building" to "N")
+        // Reference: Laya-style confident candidate.
+        val auto = send(workflow.startDraft("auto"), narration, listOf("water_leak" to 0.92), fields)
+        // ASR_LLM: the same narration with no candidate stays unclassified until the reporter picks the type.
+        val start = workflow.startDraft("manual")
+        val unclassified = turn(narration, emptyList(), fields, sessionId = "manual", revision = start.revision)
+        assertEquals(CLASSIFYING, workflow.onEngineResult(unclassified)!!.state)
+        // The picker lists every seeded taxonomy type.
+        val types = workflow.incidentTypes()
+        assertEquals(count("SELECT COUNT(*) FROM incident_types"), types.size.toLong())
+        assertTrue(types.any { it.incidentTypeId == "water_leak" && it.departmentName.isNotBlank() })
+        val manual = workflow.chooseIncidentType("manual", "water_leak", unclassified)
+
+        assertEquals(TurnOutcome(auto.state, auto.question), TurnOutcome(manual.state, manual.question))
+        assertEquals(FORM_FILLING, manual.state)
+        val stored = "SELECT group_concat(f.field_name || '=' || e.value, ';') FROM (SELECT * FROM extracted_fields " +
+            "WHERE session_id = ? AND superseded = 0 ORDER BY field_id) e JOIN form_fields f ON e.field_id = f.field_id"
+        assertEquals(query(stored, "auto"), query(stored, "manual"))
+        assertTrue(count("SELECT COUNT(*) FROM extracted_fields WHERE session_id = 'manual' AND superseded = 0 AND value IS NOT NULL") > 0)
+        assertEquals("water_leak", query("SELECT proposed_incident_type_id FROM draft_sessions WHERE session_id = 'manual'"))
+        // The rest of the flow is the untouched FORM_FILLING path.
+        assertEquals("Which floor?", send(manual, "It's spreading", fields = listOf("water_spread" to "spreading")).question)
+    }
+
+    @Test fun choosingATypeIsRefusedOnceTheDraftHasOneOrForAnUnknownType() {
+        val start = workflow.startDraft("m2")
+        fun refused(block: () -> Unit) = try { block(); fail("Expected refusal") } catch (_: IllegalArgumentException) { }
+        refused { workflow.chooseIncidentType("m2", "not_a_type", null) }
+        assertEquals("LISTENING", query("SELECT state FROM draft_sessions WHERE session_id = 'm2'"))
+        // Without the narration turn nothing is pre-filled: the first required question is asked.
+        assertEquals(FORM_FILLING, workflow.chooseIncidentType("m2", "water_leak", null).state)
+        refused { workflow.chooseIncidentType("m2", "power_outage", null) }
+        assertEquals("water_leak", query("SELECT proposed_incident_type_id FROM draft_sessions WHERE session_id = 'm2'"))
+        assertEquals(0L, count("SELECT COUNT(*) FROM extracted_fields WHERE session_id = 'm2' AND value IS NOT NULL"))
+        assertEquals(LISTENING, start.state)
+    }
+
     @Test fun cancelAndResultsAfterFinishCreateNothing() {
         val start = workflow.startDraft("c1")
         assertEquals(CANCELLED, workflow.cancel("c1").state)

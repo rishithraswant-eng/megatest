@@ -8,6 +8,8 @@ import android.os.Bundle
 import android.view.View
 import android.widget.*
 import org.seedhecode.core.audio.ConversationCapture
+import org.seedhecode.core.inference.PipelineMode
+import org.seedhecode.core.inference.TurnResult
 import org.seedhecode.incidentassistant.data.*
 import org.seedhecode.incidentassistant.engine.*
 import java.util.UUID
@@ -28,6 +30,12 @@ class ConversationActivity : Activity() {
     private lateinit var languages: Spinner
     private lateinit var question: TextView
     private lateinit var skipClarifying: Button
+    private lateinit var typePanel: LinearLayout
+    private lateinit var typeButtons: LinearLayout
+    /** True when no Laya classifier is loaded (ASR_LLM bundle), so the reporter picks the incident type. */
+    private var manualTypes = true
+    /** The turn that left the draft unclassified; its extracted fields are applied once a type is picked. */
+    @Volatile private var unclassifiedTurn: TurnResult? = null
     private lateinit var reviewPanel: LinearLayout
     private lateinit var summary: TextView
     private lateinit var confirm: Button
@@ -110,6 +118,11 @@ class ConversationActivity : Activity() {
         button("Repeat question aloud") { step?.question?.let(::speakQuestion) ?: run { status.text = "No question to repeat." } }
         skipClarifying = button("Skip remaining questions") { act { it.skipClarification(draftSessionId) } }.apply { visibility = View.GONE }
 
+        // ASR_LLM bundles have no Laya classifier: the reporter confirms the incident type by hand.
+        typePanel = panel()
+        label("No classifier is installed, so please choose the incident type:", 16f, typePanel)
+        typeButtons = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; typePanel.addView(this) }
+
         reviewPanel = panel()
         label("Review your report", 20f, reviewPanel)
         summary = label("", 16f, reviewPanel)
@@ -149,11 +162,17 @@ class ConversationActivity : Activity() {
         controls()
         background {
             val opened = ReportingWorkflow(IncidentStore.open(this))
-            val first = opened.startDraft(draftSessionId)
+            // Resume the draft chosen on the recovery prompt (05_UIUX 2.7), otherwise start a new one.
+            val first = intent.getStringExtra(EXTRA_RESUME_SESSION)?.let(opened::resume) ?: opened.startDraft(draftSessionId)
+            val fields = if (first.state == SessionState.REVIEWING) opened.correctableFields(first.sessionId) else emptyList()
+            val types = opened.incidentTypes()
             val pack = models.load()
             ui {
                 workflow = opened
-                render(first, emptyList())
+                draftSessionId = first.sessionId
+                manualTypes = pack?.mode != PipelineMode.FULL
+                showTypes(types)
+                render(first, fields)
                 modelStatus.text = if (pack == null) "No trained model bundle installed. Import CfC, Laya, Whisper and Qwen before processing."
                     else "Bundle verified: ${pack.versions().entries.joinToString { "${it.key}: ${it.value}" }}"
                 status.text = "Local setup checked."
@@ -188,6 +207,7 @@ class ConversationActivity : Activity() {
         }
         if (next.question != null && next.question != previousQuestion) speakQuestion(next.question)
         skipClarifying.visibility = if (next.state == SessionState.CLARIFYING) View.VISIBLE else View.GONE
+        typePanel.visibility = if (manualTypes && next.state == SessionState.CLASSIFYING) View.VISIBLE else View.GONE
 
         reviewPanel.visibility = if (next.state == SessionState.REVIEWING) View.VISIBLE else View.GONE
         summary.text = next.summary.entries.joinToString("\n") { (name, entry) ->
@@ -211,6 +231,22 @@ class ConversationActivity : Activity() {
             else -> "This report was already submitted."
         } + if (next.pendingLinkedSessionId != null) "\nYou also described a second incident that still needs its own report." else ""
         if (finished) stopListening()
+    }
+
+    private fun showTypes(types: List<IncidentTypeOption>) {
+        typeButtons.removeAllViews()
+        types.forEach { option ->
+            typeButtons.addView(Button(this).apply {
+                text = "${option.label} · ${option.departmentName}"; isAllCaps = false
+                setOnClickListener {
+                    act { current ->
+                        val sessionId = draftSessionId
+                        val turn = unclassifiedTurn?.takeIf { it.key.sessionId == sessionId }
+                        current.chooseIncidentType(sessionId, option.incidentTypeId, turn).also { unclassifiedTurn = null }
+                    }
+                }
+            })
+        }
     }
 
     private fun speakQuestion(value: String) {
@@ -264,6 +300,7 @@ class ConversationActivity : Activity() {
                     val current = workflow
                     if (current != null) background {
                         val next = current.onEngineResult(result)
+                        if (next?.state == SessionState.CLASSIFYING) unclassifiedTurn = result
                         val fields = if (next?.state == SessionState.REVIEWING) current.correctableFields(next.sessionId) else emptyList()
                         ui {
                             if (next == null) status.text = "Ignored a result for an older version of this report."
@@ -283,6 +320,8 @@ class ConversationActivity : Activity() {
             runOnUiThread {
                 if (isDestroyed || isFinishing) { loaded.close(); return@runOnUiThread }
                 engine = loaded
+                manualTypes = pack.mode != PipelineMode.FULL
+                typePanel.visibility = if (manualTypes && step?.state == SessionState.CLASSIFYING) View.VISIBLE else View.GONE
                 loaded.beginDraft(draftSessionId, revision, step?.question)
                 bindCapture(loaded)
                 busy = false; controls()
@@ -377,5 +416,9 @@ class ConversationActivity : Activity() {
         super.onDestroy()
     }
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
-    companion object { private const val IMPORT_MODELS = 201; private const val EXPORT_DIAGNOSTICS = 202; private const val MICROPHONE = 203 }
+    companion object {
+        /** Session id of an unfinished draft to resume instead of starting a new one. */
+        const val EXTRA_RESUME_SESSION = "org.seedhecode.incidentassistant.RESUME_SESSION"
+        private const val IMPORT_MODELS = 201; private const val EXPORT_DIAGNOSTICS = 202; private const val MICROPHONE = 203
+    }
 }

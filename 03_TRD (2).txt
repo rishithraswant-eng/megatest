@@ -73,6 +73,16 @@ caveat that benchmark needs to check.
                    has to be carried by the ASR + semantic model instead
                    of this layer -- THIS DECISION IS NOT YET MADE and is a
                    required Phase 1 output, not an assumption to build on.
+      DECIDED (PRD FR3): Hindi/code-mixed handling is carried by ASR + the
+                   semantic model, never by this layer. ASR owns
+                   multilingual capture; Qwen3 owns translation to English
+                   as a future explicit step before this layer, Laya and
+                   extraction run. Not built live for this submission
+                   (a second chained LLM call per turn is a live-demo
+                   risk on CPU-only inference); Whisper's built-in
+                   translation is used meanwhile. Full decision and
+                   planned design: 01_IDEA_OVERVIEW.txt section 5,
+                   "HINDI / CODE-MIXED NORMALIZATION".
       Rollout rule: start with tentative-only predictions (always verified
                    by the semantic model); only let the LNN complete a
                    given task unverified once measured validation shows

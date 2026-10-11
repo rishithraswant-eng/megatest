@@ -144,6 +144,36 @@ those outcomes -- not adopted for its own sake.
     double-checking it, once validation demonstrates adequate accuracy on
     that specific task.
 
+  HINDI / CODE-MIXED NORMALIZATION  (PHASE 1 DECISION -- resolves PRD FR3)
+    Decision: ASR owns multilingual capture; translation to English is
+    owned by the on-device semantic model (Qwen3), as an explicit
+    translate-to-English step between ASR output and every downstream
+    understanding stage (LNN/CfC relevance, Laya classification, Qwen
+    extraction). The LNN and Laya are never asked to understand Hindi.
+    Status for this submission: DOCUMENTED, NOT BUILT LIVE. A dedicated
+    Qwen translation call would add a second chained LLM call per Hindi
+    turn; on CPU-only inference one extraction call already takes far too
+    long to risk a second in a live demo. Until it is built, the live app
+    uses Whisper's own built-in translate-to-English output for any
+    non-English segment, and keeps the original-language transcript next
+    to it (dialogue_turns.raw_text, normalized_text, lang_detected).
+    Planned design for the Qwen step (post-submission):
+      - Classify each final ASR segment as "en", "hi" or "mixed" (both
+        Devanagari and Latin script present, or Hindi that ASR wrote in
+        Latin script); "en" passes through unchanged.
+      - Send "hi"/"mixed" segments to Qwen3 with a translation-only prompt
+        (never summarize, answer or add facts; keep room names, floors,
+        equipment IDs and numbers exactly as spoken), constrained by a
+        grammar that only permits {"english": "..."}.
+      - Extraction evidence stays an exact substring of the English text,
+        and the original transcript is kept for traceability.
+      - Translate final segments only, never live captions, and report a
+        failed translation as an error rather than silently passing
+        untranslated Hindi to extraction.
+    Known limits to measure on real recordings: romanized Hinglish that
+    ASR labels "en" cannot be detected by script; Qwen3-0.6B Hindi
+    translation quality and its added latency are unvalidated.
+
   ON-DEVICE SEMANTIC LANGUAGE MODEL
     Handles ambiguous narration, complex corrections, contradictions,
     difficult extraction, contextual clarification questions, and local
@@ -270,6 +300,23 @@ those outcomes -- not adopted for its own sake.
   reporting conversation, and must never present a correlation as a
   verified cause to an admin. Treat as a stretch addition only after the
   core department-form flow (Phases 1-4 below) is solid.
+
+  DEFERRED FROM LIVE INTEGRATION FOR THIS SUBMISSION (validated separately
+  on real hardware): Laya/CfC classification and Snapdragon NPU (QNN /
+  Hexagon) acceleration. Both are real, benchmarked work: on the SM8750
+  kit's Hexagon NPU, the fine-tuned Laya classifier (w8a16) reached 87.6%
+  incident-type accuracy over all turns (90.6% on final turns) and 95.2%
+  sentence relevance accuracy at 10.9 ms per turn (859.6 MB DLC), and the
+  CfC liquid network (w8a16) reached 57.5% type and 74.5% relevance
+  accuracy at 1.6 ms per turn (11.7 MB) -- codebreaker77/Model,
+  classifier/laya/out/{ft,lnn}/device_metrics_w8a16.json. They are not
+  wired into the live app for this submission: the exported models'
+  tokenizer and input/output contract does not yet match the app's, and
+  the app runs CPU-only backends (whisper.cpp and llama.cpp on CPU). The
+  live pipeline is therefore ASR (Whisper) + semantic model (Qwen3), and
+  the reporter confirms the incident type on screen instead of Laya
+  predicting it. Integrating Laya/CfC and moving inference onto the NPU
+  remain post-submission work.
 
 10. MAIN CHANGES FROM THE ORIGINAL IDEA (CARRIED FORWARD FROM THE SOURCE
     UPDATE, FOR TRACEABILITY)
