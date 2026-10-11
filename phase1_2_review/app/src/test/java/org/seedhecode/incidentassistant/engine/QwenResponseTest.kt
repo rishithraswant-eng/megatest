@@ -27,6 +27,13 @@ class QwenResponseTest {
         rejects("""{"fields":[],"dialogue_act":null,"tool_calls":[],"incident_groups":[]}""")
         rejects(with("extra_key", 1))
     }
+    @Test fun `native generation grammar emits exactly the parser contract keys`() {
+        // A real Qwen turn failed because llama_jni.cpp's grammar allowed only Main's four keys.
+        val source = java.io.File("../core/native-llama/src/main/cpp/llama_jni.cpp").readText()
+        val root = source.lineSequence().single { it.startsWith("root ::=") }
+        val keys = Regex("""\\"([a-z_]+)\\"""").findAll(root).map { it.groupValues[1] }.toList()
+        assertEquals(QwenResponse.CONTRACT_KEYS.toList(), keys)
+    }
     @Test fun `5_1 flags are parsed as booleans and nothing else`() {
         val raw = JSONObject(empty).put("distinct_incidents_mentioned", true).put("user_wants_to_stop_clarifying", true).toString()
         val parsed = parse(raw)

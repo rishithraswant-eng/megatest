@@ -66,8 +66,10 @@ Java_org_seedhecode_incidentassistant_engine_NativeLlama_generate(JNIEnv *env, j
         }
     }
     // Constrain syntax at generation time; Kotlin still checks evidence and the contract.
+    // root must emit exactly QwenResponse.CONTRACT_KEYS, including the two 5.1 booleans.
     static const char *grammar = R"gbnf(
-root ::= "{" ws "\"fields\"" ws ":" ws fields "," ws "\"dialogue_act\"" ws ":" ws act "," ws "\"tool_calls\"" ws ":" ws tools "," ws "\"incident_groups\"" ws ":" ws groups "}" ws
+root ::= "{" ws "\"fields\"" ws ":" ws fields "," ws "\"dialogue_act\"" ws ":" ws act "," ws "\"tool_calls\"" ws ":" ws tools "," ws "\"incident_groups\"" ws ":" ws groups "," ws "\"distinct_incidents_mentioned\"" ws ":" ws boolean "," ws "\"user_wants_to_stop_clarifying\"" ws ":" ws boolean "}" ws
+boolean ::= ("true" | "false") ws
 fields ::= "[" ws (field ("," ws field)*)? "]" ws
 field ::= "{" ws "\"field_name\"" ws ":" ws string "," ws "\"value\"" ws ":" ws value "," ws "\"confidence\"" ws ":" ws confidence "," ws "\"evidence\"" ws ":" ws string "," ws "\"status\"" ws ":" ws status "}" ws
 confidence ::= ("0" ("." [0-9]+)? | "1" ("." "0"+)?) ws
