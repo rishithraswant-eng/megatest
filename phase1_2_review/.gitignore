@@ -25,7 +25,8 @@ Thumbs.db
 captures/
 .cxx/
 .externalNativeBuild/
-/third_party/
+# third_party/ holds git submodules: the parent repo tracks only their pinned commits.
+scripts/__pycache__/
 
 # Audio and model assets stay local unless deliberately packaged later.
 *.wav
