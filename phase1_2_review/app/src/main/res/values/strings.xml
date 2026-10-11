@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Incident Assistant</string>
+    <string name="app_name">Voice Desk</string>
     <string name="conversation">Open incident conversation</string>
     <string name="admin">Admin: view submitted incidents</string>
     <string name="brand">SEEDHECODE / VOICE DESK</string>

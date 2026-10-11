@@ -8,7 +8,8 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "org.seedhecode.incidentassistant"
+        // Distinct from the teammates' builds that also use org.seedhecode.incidentassistant on the same kit.
+        applicationId = "org.seedhecode.voicedesk"
         minSdk = 26 // PBKDF2WithHmacSHA256 and java.time require API 26.
         targetSdk = 34
         versionCode = 1
