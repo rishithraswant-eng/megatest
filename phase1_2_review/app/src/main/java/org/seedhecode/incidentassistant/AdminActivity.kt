@@ -22,17 +22,29 @@ class AdminActivity : Activity() {
     private lateinit var tabs: LinearLayout
     private lateinit var listTab: Button
     private lateinit var mapTab: Button
+    private lateinit var adminsTab: Button
     private lateinit var list: LinearLayout
     private lateinit var mapPanel: LinearLayout
     private lateinit var floors: LinearLayout
     private lateinit var map: ZoneMapView
     private lateinit var mapNote: TextView
     private lateinit var details: LinearLayout
+    private lateinit var adminsPanel: LinearLayout
+    private lateinit var adminList: LinearLayout
+    private lateinit var newName: EditText
+    private lateinit var newPassword: EditText
+    private lateinit var newPasswordAgain: EditText
+    private lateinit var rolePicker: Spinner
+    private lateinit var departmentLabel: TextView
+    private lateinit var departmentPicker: Spinner
+    private lateinit var createAdmin: Button
+    private var departments: List<DepartmentOption> = emptyList()
     private var settingUp = false
 
     private var session: AdminSession? = null
     private var data: MapData? = null
-    private var showingMap = false
+    private enum class Tab { LIST, MAP, ADMINS }
+    private var tab = Tab.LIST
     private var floor: String? = null
     /** What the map's detail panel shows: one incident, one zone, or nothing yet. */
     private var selection: Selection? = null
@@ -67,12 +79,13 @@ class AdminActivity : Activity() {
         action = Button(this).apply { isAllCaps = false; setOnClickListener { submitForm() }; form.addView(this) }
 
         tabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; visibility = View.GONE; column.addView(this) }
-        fun tab(text: String, map: Boolean) = Button(this).apply {
+        fun tab(text: String, target: Tab) = Button(this).apply {
             this.text = text; isAllCaps = false; layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
-            setOnClickListener { showingMap = map; render() }; tabs.addView(this)
+            setOnClickListener { tab = target; render() }; tabs.addView(this)
         }
-        listTab = tab("List", false)
-        mapTab = tab("Map", true)
+        listTab = tab("List", Tab.LIST)
+        mapTab = tab("Map", Tab.MAP)
+        adminsTab = tab("Admins", Tab.ADMINS)
         list = vertical()
         mapPanel = vertical().apply { visibility = View.GONE }
         floors = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -88,6 +101,28 @@ class AdminActivity : Activity() {
             "Grey pins are resolved. Tap a pin or a zone for details.", 12f, mapPanel)
         mapNote = label("", 12f, mapPanel)
         details = vertical(mapPanel)
+
+        // 05_UIUX_REQUIREMENTS 1.4: admin accounts and role levels (super_admin only).
+        adminsPanel = vertical().apply { visibility = View.GONE }
+        label("Admin accounts", 18f, adminsPanel)
+        adminList = vertical(adminsPanel)
+        label("Create an admin", 16f, adminsPanel)
+        newName = field("Admin name", false, adminsPanel)
+        newPassword = field("Password (at least 8 characters)", true, adminsPanel)
+        newPasswordAgain = field("Repeat password", true, adminsPanel)
+        label("Role", 14f, adminsPanel)
+        rolePicker = Spinner(this).apply {
+            adapter = ArrayAdapter(this@AdminActivity, android.R.layout.simple_spinner_dropdown_item, ROLES.map { it.second })
+            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) = showDepartmentPicker()
+                override fun onNothingSelected(parent: AdapterView<*>?) = showDepartmentPicker()
+            }
+            adminsPanel.addView(this)
+        }
+        departmentLabel = label("Department (required for a department admin)", 14f, adminsPanel)
+        departmentPicker = Spinner(this).apply { adminsPanel.addView(this) }
+        createAdmin = Button(this).apply { text = "Create admin"; isAllCaps = false; setOnClickListener { submitNewAdmin() }; adminsPanel.addView(this) }
+        showDepartmentPicker()
 
         background {
             val opened = AuthManager(IncidentStore.open(this))
@@ -121,7 +156,9 @@ class AdminActivity : Activity() {
                 (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
                     .hideSoftInputFromWindow(form.windowToken, 0)
                 form.visibility = View.GONE; tabs.visibility = View.VISIBLE
+                adminsTab.visibility = if (signedIn.roleLevel == "super_admin") View.VISIBLE else View.GONE
                 session = signedIn; data = loaded; floor = MapLayout.defaultFloor(loaded)
+                if (signedIn.roleLevel == "super_admin") loadAdmins(signedIn)
                 status.text = signedInText(signedIn, loaded)
                 render()
             }
@@ -134,9 +171,11 @@ class AdminActivity : Activity() {
     private fun render() {
         val admin = session ?: return
         val loaded = data ?: return
-        listTab.isEnabled = showingMap; mapTab.isEnabled = !showingMap
-        list.visibility = if (showingMap) View.GONE else View.VISIBLE
-        mapPanel.visibility = if (showingMap) View.VISIBLE else View.GONE
+        if (tab == Tab.ADMINS && admin.roleLevel != "super_admin") tab = Tab.LIST
+        listTab.isEnabled = tab != Tab.LIST; mapTab.isEnabled = tab != Tab.MAP; adminsTab.isEnabled = tab != Tab.ADMINS
+        list.visibility = if (tab == Tab.LIST) View.VISIBLE else View.GONE
+        mapPanel.visibility = if (tab == Tab.MAP) View.VISIBLE else View.GONE
+        adminsPanel.visibility = if (tab == Tab.ADMINS) View.VISIBLE else View.GONE
 
         list.removeAllViews()
         if (loaded.incidents.isEmpty()) list.addView(note("No submitted incidents you can see yet."))
@@ -209,12 +248,70 @@ class AdminActivity : Activity() {
         }
     }
 
+    private fun showDepartmentPicker() {
+        val departmentAdmin = ROLES[rolePicker.selectedItemPosition.coerceAtLeast(0)].first == "department_admin"
+        departmentLabel.visibility = if (departmentAdmin) View.VISIBLE else View.GONE
+        departmentPicker.visibility = if (departmentAdmin) View.VISIBLE else View.GONE
+    }
+
+    private fun loadAdmins(admin: AdminSession) {
+        val current = auth ?: return
+        background {
+            val options = current.departments(admin.orgId); val accounts = current.admins(admin.orgId)
+            ui { departments = options; showAdmins(accounts) }
+        }
+    }
+
+    private fun showAdmins(accounts: List<AdminAccount>) {
+        departmentPicker.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item,
+            listOf("Choose a department") + departments.map { it.name })
+        adminList.removeAllViews()
+        val names = departments.associate { it.departmentId to it.name }
+        accounts.forEach { account ->
+            val role = ROLES.firstOrNull { it.first == account.roleLevel }?.second ?: account.roleLevel
+            adminList.addView(note("${account.displayName} · $role" + (account.departmentId?.let { " · ${names[it] ?: it}" } ?: "")))
+        }
+    }
+
+    private fun submitNewAdmin() {
+        val admin = session ?: return
+        val current = auth ?: return
+        val role = ROLES[rolePicker.selectedItemPosition.coerceAtLeast(0)].first
+        // Position 0 is the "Choose a department" placeholder, so a department must be picked explicitly.
+        val department = if (role == "department_admin") departments.getOrNull(departmentPicker.selectedItemPosition - 1) else null
+        val displayName = newName.text.toString().trim()
+        val secret = newPassword.text.toString()
+        when {
+            displayName.isEmpty() -> { status.text = "Enter a name for the new admin."; return }
+            secret != newPasswordAgain.text.toString() -> { status.text = "The passwords do not match."; return }
+            role == "department_admin" && department == null -> { status.text = "Choose the department this admin manages."; return }
+        }
+        createAdmin.isEnabled = false
+        background {
+            // PBKDF2 hashing is slow; createAdminAs also re-checks super_admin, role/department and name rules.
+            val created = runCatching { current.createAdminAs(admin, displayName, secret, role, department?.departmentId) }
+            val accounts = current.admins(admin.orgId)
+            ui {
+                createAdmin.isEnabled = true; showAdmins(accounts)
+                newPassword.setText(""); newPasswordAgain.setText("")
+                status.text = created.fold({ newName.setText(""); "Created $displayName." }, { it.message ?: "Could not create the admin." })
+            }
+        }
+    }
+
     private fun background(task: () -> Unit) {
         io.execute { try { task() } catch (error: Exception) {
-            ui { action.isEnabled = true; status.text = error.message ?: "Admin action failed." }
+            ui { action.isEnabled = true; createAdmin.isEnabled = true; status.text = error.message ?: "Admin action failed." }
         } }
     }
     private fun ui(task: () -> Unit) { runOnUiThread { if (!isDestroyed && !isFinishing) task() } }
     override fun onDestroy() { io.shutdown(); super.onDestroy() }
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
+
+    companion object {
+        /** role_level values accepted by AuthManager.createAdmin, with the label shown in the picker. */
+        private val ROLES = listOf("facilities_admin" to "Facilities admin (all departments)",
+            "department_admin" to "Department admin (one department)",
+            "super_admin" to "Super admin (all departments, manages admins)")
+    }
 }

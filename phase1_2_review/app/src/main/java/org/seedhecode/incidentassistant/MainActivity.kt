@@ -19,6 +19,8 @@ import org.seedhecode.core.audio.MicrophoneRecorder
 import org.seedhecode.core.audio.RecordingStore
 import org.seedhecode.core.audio.VoiceRecording
 import org.seedhecode.core.inference.CaptureOnlyVoiceEngine
+import org.seedhecode.incidentassistant.data.IncidentStore
+import org.seedhecode.incidentassistant.data.ReportingWorkflow
 import org.seedhecode.incidentassistant.feature.report.CaptureState
 import java.io.File
 import java.text.DateFormat
@@ -52,6 +54,8 @@ class MainActivity : Activity(), MicrophoneRecorder.Listener {
         findViewById<Button>(R.id.admin_button).setOnClickListener {
             startActivity(Intent(this, AdminActivity::class.java))
         }
+        // Only on a real (re)start, not when the activity is recreated after rotation.
+        if (savedInstanceState == null) offerDraftRecovery()
         try {
             store = RecordingStore(File(filesDir, "recordings"))
             recorder = MicrophoneRecorder(store, CaptureOnlyVoiceEngine()).also { it.listener = this }
@@ -73,6 +77,36 @@ class MainActivity : Activity(), MicrophoneRecorder.Listener {
         super.onResume()
         foreground = true
         if (::store.isInitialized) refreshLibrary()
+    }
+
+    /** 05_UIUX_REQUIREMENTS 2.7: offer the reporter's unfinished draft, if any, with Resume / Discard. */
+    private fun offerDraftRecovery() {
+        Thread {
+            val draft = try { ReportingWorkflow(IncidentStore.open(this)).recoverableDraft() } catch (error: Exception) {
+                runOnUiThread { status.text = error.message ?: "Could not check for an unfinished report." }; return@Thread
+            } ?: return@Thread
+            runOnUiThread {
+                if (isDestroyed || isFinishing) return@runOnUiThread
+                AlertDialog.Builder(this)
+                    .setTitle("Unfinished report")
+                    .setMessage("Continue your report about ${draft.description}?")
+                    .setPositiveButton("Resume") { _, _ ->
+                        startActivity(Intent(this, ConversationActivity::class.java)
+                            .putExtra(ConversationActivity.EXTRA_RESUME_SESSION, draft.sessionId))
+                    }
+                    .setNegativeButton("Discard") { _, _ -> discardDraft(draft.sessionId) }
+                    .setCancelable(false)
+                    .show()
+            }
+        }.start()
+    }
+
+    private fun discardDraft(sessionId: String) {
+        Thread {
+            val message = try { ReportingWorkflow(IncidentStore.open(this)).discard(sessionId); "Unfinished report discarded." }
+                catch (error: Exception) { error.message ?: "Could not discard the unfinished report." }
+            runOnUiThread { if (!isDestroyed) Toast.makeText(this, message, Toast.LENGTH_SHORT).show() }
+        }.start()
     }
 
     private fun requestCapture() {

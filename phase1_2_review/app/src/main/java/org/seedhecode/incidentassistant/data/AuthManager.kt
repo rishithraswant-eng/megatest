@@ -35,6 +35,9 @@ object PasswordHasher {
 
 data class AdminSession(val adminId: String, val roleLevel: String, val orgId: String, val departmentId: String?)
 
+data class DepartmentOption(val departmentId: String, val name: String)
+data class AdminAccount(val adminId: String, val displayName: String, val roleLevel: String, val departmentId: String?)
+
 data class IncidentListing(
     val incidentId: String, val typeLabel: String, val departmentId: String, val priority: String, val status: IncidentStatus,
     val zoneName: String?, val description: String, val reportedAt: String, val localSubmissionOnly: Boolean,
@@ -65,6 +68,13 @@ class AuthManager(private val database: IncidentDatabase) {
         require(roleLevel in setOf("super_admin", "facilities_admin", "department_admin")) { "Unknown role $roleLevel" }
         require((roleLevel == "department_admin") == (departmentId != null)) { "Only department_admin has a department." }
         require(displayName.isNotBlank() && password.length >= 8) { "Name is required and the password needs at least 8 characters." }
+        // Sign-in matches on display name, so two admins with one name would make login ambiguous.
+        require(database.readableDatabase.string("SELECT u.user_id FROM users u JOIN admin_credentials a ON a.user_id = u.user_id " +
+            "WHERE u.org_id = ? AND u.display_name = ?", orgId, displayName.trim()) == null) { "An admin named ${displayName.trim()} already exists." }
+        if (departmentId != null) require(database.readableDatabase.string(
+            "SELECT department_id FROM departments WHERE department_id = ? AND org_id = ?", departmentId, orgId) != null) {
+            "Unknown department $departmentId."
+        }
         val userId = "user_" + newId(); val adminId = "adm_" + newId()
         database.writableDatabase.inTransaction {
             execSQL("INSERT INTO users (user_id, org_id, display_name, role) VALUES (?, ?, ?, 'admin')", arrayOf(userId, orgId, displayName.trim()))
@@ -72,6 +82,23 @@ class AuthManager(private val database: IncidentDatabase) {
                 "VALUES (?, ?, ?, ?, ?, ?)", arrayOf(adminId, userId, PasswordHasher.hash(password), roleLevel, departmentId, now()))
         }
         return adminId
+    }
+
+    /** Admin accounts are managed by super_admin only, and only inside the creator's own organization. */
+    fun createAdminAs(creator: AdminSession, displayName: String, password: String, roleLevel: String, departmentId: String?): String {
+        if (creator.roleLevel != "super_admin") throw SecurityException("Only a super admin can create admin accounts.")
+        return createAdmin(creator.orgId, displayName, password, roleLevel, departmentId)
+    }
+
+    fun departments(orgId: String): List<DepartmentOption> = database.readableDatabase.rawQuery(
+        "SELECT department_id, name FROM departments WHERE org_id = ? ORDER BY name", arrayOf(orgId)).use { c ->
+        buildList { while (c.moveToNext()) add(DepartmentOption(c.getString(0), c.getString(1))) }
+    }
+
+    fun admins(orgId: String): List<AdminAccount> = database.readableDatabase.rawQuery(
+        "SELECT a.admin_id, u.display_name, a.role_level, a.department_id FROM admin_credentials a JOIN users u ON a.user_id = u.user_id " +
+            "WHERE u.org_id = ? ORDER BY a.created_at", arrayOf(orgId)).use { c ->
+        buildList { while (c.moveToNext()) add(AdminAccount(c.getString(0), c.getString(1), c.getString(2), if (c.isNull(3)) null else c.getString(3))) }
     }
 
     /** Submitted incidents of the admin's org, filtered per department through [checkDepartmentAccess]. */
